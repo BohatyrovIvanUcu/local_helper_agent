@@ -51,3 +51,4 @@ OBSIDIAN_VAULT_PATH=/шлях/до/вашого/ObsidianVault
 ```bash
 npm run tauri dev
 ```
+
