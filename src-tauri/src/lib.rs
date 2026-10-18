@@ -284,8 +284,6 @@ fn append_to_obsidian(
             .map_err(|e| format!("Не вдалося створити папку '{}': {}", parent.display(), e))?;
     }
 
-    let timestamp = Local::now().format("%Y-%m-%d %H:%M").to_string();
-
     let is_ideas_section = section
         .as_deref()
         .map(|s| {
@@ -294,23 +292,22 @@ fn append_to_obsidian(
         })
         .unwrap_or(false);
 
-    let clean_content = content.trim();
-
-    let formatted_entry = if is_ideas_section {
-        if clean_content.starts_with("- [ ]") {
-            format!("{}\n", clean_content)
-        } else if clean_content.starts_with("**[") {
-            format!("- [ ] {}\n", clean_content)
-        } else {
-            format!("- [ ] **[{}]** {}\n", timestamp, clean_content)
+    let mut clean_content = content.trim();
+    // Якщо текст ідеї випадково починався з дати/таймштампу **[YYYY-MM-DD...]**, прибираємо його
+    if is_ideas_section && clean_content.starts_with("**[") {
+        if let Some(pos) = clean_content.find("]**") {
+            clean_content = clean_content[pos + 3..].trim();
         }
-    } else if as_todo {
+    }
+
+    let formatted_entry = if is_ideas_section || as_todo {
         if clean_content.starts_with("- [ ]") {
             format!("{}\n", clean_content)
         } else {
             format!("- [ ] {}\n", clean_content)
         }
     } else {
+        let timestamp = Local::now().format("%Y-%m-%d %H:%M").to_string();
         format!("- **[{}]** {}\n", timestamp, clean_content)
     };
 
