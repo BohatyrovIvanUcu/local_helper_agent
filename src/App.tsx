@@ -114,54 +114,54 @@ function getMascotAnimation(state: MascotState): TargetAndTransition {
   switch (state) {
     case "IDLE":
       return {
-        y: [0, -6, 0],
-        scale: [1, 1.02, 1],
+        y: [0, -2.5, 0],
+        scale: [1, 1.01, 1],
         rotate: 0,
         transition: {
-          duration: 2.8,
+          duration: 3.2,
           repeat: Infinity,
           ease: "easeInOut",
         },
       };
     case "THINKING":
       return {
-        y: [0, -3, 0],
-        rotate: [-3, 3, -3],
-        scale: 1.02,
+        y: [0, -1.5, 0],
+        rotate: [-1.5, 1.5, -1.5],
+        scale: 1.01,
         transition: {
-          duration: 1.2,
+          duration: 1.6,
           repeat: Infinity,
           ease: "easeInOut",
         },
       };
     case "WORKING":
       return {
-        y: [0, -5, 0],
-        rotate: [-5, 5, -5],
-        scale: [1, 1.05, 1],
+        y: [0, -2.5, 0],
+        rotate: [-2.5, 2.5, -2.5],
+        scale: [1, 1.02, 1],
         transition: {
-          duration: 0.45,
+          duration: 0.55,
           repeat: Infinity,
           ease: "easeInOut",
         },
       };
     case "SUCCESS":
       return {
-        y: [0, -12, 0, -6, 0],
-        scale: [1, 1.08, 1.02, 1.06, 1],
-        rotate: [0, -4, 4, 0],
+        y: [0, -4, 0, -1.5, 0],
+        scale: [1, 1.03, 1],
+        rotate: [0, -1.5, 1.5, 0],
         transition: {
-          duration: 0.9,
+          duration: 1.0,
           repeat: Infinity,
           ease: "easeOut",
         },
       };
     case "ERROR":
       return {
-        x: [0, -7, 7, -5, 5, 0],
-        rotate: [0, -6, 6, -3, 3, 0],
+        x: [0, -4, 4, -2, 2, 0],
+        rotate: [0, -3, 3, -1, 1, 0],
         transition: {
-          duration: 0.5,
+          duration: 0.45,
         },
       };
   }
@@ -630,10 +630,10 @@ export default function App() {
           animate={
             photoPop
               ? {
-                  scale: [1, 1.15, 0.96, 1.05, 1],
-                  y: [0, -12, 2, -4, 0],
-                  rotate: [0, -4, 4, -2, 0],
-                  transition: { duration: 0.75, ease: "easeOut" },
+                  scale: [1, 1.04, 1],
+                  y: [0, -3.5, 0],
+                  rotate: [0, -1.5, 1.5, 0],
+                  transition: { duration: 0.4, ease: "easeOut" },
                 }
               : getMascotAnimation(mascotState)
           }
