@@ -203,6 +203,9 @@ export default function App() {
       cleanupListeners();
 
       if (wasClick) {
+        if (bubbleText && !isInputOpen) {
+          setBubbleText(null);
+        }
         setIsInputOpen((prev) => !prev);
       }
     };
@@ -281,24 +284,68 @@ export default function App() {
   const spriteSrc = getMascotSprite(mascotState, activeTool);
 
   return (
-    <div className="relative flex h-[400px] w-[320px] flex-col items-center justify-between bg-transparent px-3 py-3 select-none">
-      {/* Верхня зона: Хмаринка відповіді (Speech Bubble) */}
-      <div className="relative flex min-h-[110px] w-full items-end justify-center">
+    <div className="relative flex h-[240px] w-[280px] flex-col items-center justify-start bg-transparent px-3 pt-3 select-none">
+      {/* Верхня зона: Маскот (починається з самого верху, без порожнього мертвого простору) */}
+      <div className="relative flex flex-col items-center justify-center">
+        <motion.div
+          onMouseDown={handleMascotMouseDown}
+          animate={getMascotAnimation(mascotState)}
+          whileHover={{ scale: 1.04 }}
+          whileTap={{ scale: 0.96 }}
+          title="Клікніть, щоб написати • Перетягніть, щоб перемістити"
+          className="relative flex h-[118px] w-[118px] cursor-grab items-center justify-center active:cursor-grabbing"
+        >
+          {/* М'яке світіння під час активних станів */}
+          <div
+            className={`pointer-events-none absolute inset-1 rounded-full blur-xl transition-opacity duration-300 ${
+              mascotState === "SUCCESS"
+                ? "bg-amber-400/30 opacity-100"
+                : mascotState === "WORKING"
+                ? "bg-purple-500/25 opacity-100"
+                : mascotState === "ERROR"
+                ? "bg-red-500/35 opacity-100"
+                : "opacity-0"
+            }`}
+          />
+
+          <img
+            src={spriteSrc}
+            alt={`Mascot ${mascotState}`}
+            draggable={false}
+            className={`pointer-events-none h-[112px] w-[112px] object-contain drop-shadow-[0_6px_12px_rgba(0,0,0,0.45)] transition-all duration-200 ${
+              mascotState === "ERROR" ? "hue-rotate-[-35deg] saturate-150" : ""
+            }`}
+          />
+        </motion.div>
+      </div>
+
+      {/* Нижня зона: Хмаринка відповіді АБО Рядок вводу (з'являються прямо під маскотом) */}
+      <div className="relative mt-1 flex w-full flex-col items-center justify-start">
+        {/* Хмаринка повідомлення/статусу */}
         <AnimatePresence mode="wait">
           {displayedBubble && (
             <motion.div
               key={statusBanner ? `status-${mascotState}-${activeTool}` : "reply"}
-              initial={{ opacity: 0, y: 10, scale: 0.92 }}
+              initial={{ opacity: 0, y: -6, scale: 0.94 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 8, scale: 0.92 }}
-              transition={{ duration: 0.2, ease: "easeOut" }}
-              className={`relative max-h-[115px] w-full overflow-y-auto rounded-2xl border px-3.5 py-2.5 text-xs leading-relaxed shadow-lg backdrop-blur-md ${
+              exit={{ opacity: 0, y: -4, scale: 0.94 }}
+              transition={{ duration: 0.18, ease: "easeOut" }}
+              className={`relative max-h-[95px] w-full overflow-y-auto rounded-2xl border px-3 py-2 text-xs leading-relaxed shadow-lg backdrop-blur-md ${
                 mascotState === "ERROR"
                   ? "border-red-500/60 bg-zinc-900/95 text-red-200"
                   : "border-zinc-700/60 bg-zinc-900/90 text-zinc-100"
               }`}
             >
-              <div className="flex items-start justify-between gap-2">
+              {/* Хвостик хмаринки зверху по центру, що вказує на маскота */}
+              <div
+                className={`absolute -top-1.5 left-1/2 h-3 w-3 -translate-x-1/2 rotate-45 border-l border-t ${
+                  mascotState === "ERROR"
+                    ? "border-red-500/60 bg-zinc-900/95"
+                    : "border-zinc-700/60 bg-zinc-900/90"
+                }`}
+              />
+
+              <div className="flex items-start justify-between gap-1.5">
                 <div className="flex items-center gap-1.5 font-medium text-amber-400">
                   {mascotState === "WORKING" && (
                     <Wrench className="h-3.5 w-3.5 animate-spin text-amber-400" />
@@ -323,68 +370,23 @@ export default function App() {
                 )}
               </div>
 
-              <p className="mt-0.5 whitespace-pre-wrap break-words pr-1 text-[12.5px] text-zinc-100">
+              <p className="mt-0.5 whitespace-pre-wrap break-words pr-1 text-[12px] text-zinc-100">
                 {displayedBubble}
               </p>
-
-              {/* Хвостик хмаринки знизу по центру */}
-              <div
-                className={`absolute -bottom-1.5 left-1/2 h-3 w-3 -translate-x-1/2 rotate-45 border-b border-r ${
-                  mascotState === "ERROR"
-                    ? "border-red-500/60 bg-zinc-900/95"
-                    : "border-zinc-700/60 bg-zinc-900/90"
-                }`}
-              />
             </motion.div>
           )}
         </AnimatePresence>
-      </div>
 
-      {/* Центральна зона: 2D-маскот (~130x130px) */}
-      <div className="relative flex flex-col items-center justify-center my-1">
-        <motion.div
-          onMouseDown={handleMascotMouseDown}
-          animate={getMascotAnimation(mascotState)}
-          whileHover={{ scale: 1.04 }}
-          whileTap={{ scale: 0.96 }}
-          title="Клікніть, щоб написати • Перетягніть, щоб перемістити"
-          className="relative flex h-[134px] w-[134px] cursor-grab items-center justify-center active:cursor-grabbing"
-        >
-          {/* М'яке світіння під час активних станів */}
-          <div
-            className={`pointer-events-none absolute inset-2 rounded-full blur-xl transition-opacity duration-300 ${
-              mascotState === "SUCCESS"
-                ? "bg-amber-400/30 opacity-100"
-                : mascotState === "WORKING"
-                ? "bg-purple-500/25 opacity-100"
-                : mascotState === "ERROR"
-                ? "bg-red-500/35 opacity-100"
-                : "opacity-0"
-            }`}
-          />
-
-          <img
-            src={spriteSrc}
-            alt={`Mascot ${mascotState}`}
-            draggable={false}
-            className={`pointer-events-none h-[130px] w-[130px] object-contain drop-shadow-[0_6px_12px_rgba(0,0,0,0.45)] transition-all duration-200 ${
-              mascotState === "ERROR" ? "hue-rotate-[-35deg] saturate-150" : ""
-            }`}
-          />
-        </motion.div>
-      </div>
-
-      {/* Нижня зона: Виїзний рядок вводу (Input Bar) */}
-      <div className="flex min-h-[56px] w-full items-start justify-center">
+        {/* Рядок вводу */}
         <AnimatePresence>
           {isInputOpen && (
             <motion.form
-              initial={{ opacity: 0, y: -10, scale: 0.95 }}
+              initial={{ opacity: 0, y: -6, scale: 0.95 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -8, scale: 0.95 }}
+              exit={{ opacity: 0, y: -4, scale: 0.95 }}
               transition={{ duration: 0.18, ease: "easeOut" }}
               onSubmit={handleSubmit}
-              className="flex w-full items-center gap-2 rounded-xl border border-zinc-700/60 bg-zinc-900/90 px-3 py-2 shadow-lg backdrop-blur-md"
+              className="mt-1 flex w-full items-center gap-2 rounded-xl border border-zinc-700/60 bg-zinc-900/90 px-3 py-2 shadow-lg backdrop-blur-md"
             >
               <input
                 ref={inputRef}
