@@ -58,8 +58,14 @@ fn get_env_or_dotenv(key: &str) -> Option<String> {
             return Some(val.trim().to_string());
         }
     }
-    for candidate in [".env", "../.env"] {
-        if let Ok(content) = fs::read_to_string(candidate) {
+    let mut candidates = vec![PathBuf::from(".env"), PathBuf::from("../.env")];
+    if let Ok(home) = get_home_dir() {
+        candidates.push(home.join("local_helper_ai/.env"));
+        candidates.push(home.join(".config/local_helper_ai/.env"));
+    }
+
+    for candidate in candidates {
+        if let Ok(content) = fs::read_to_string(&candidate) {
             for line in content.lines() {
                 let line = line.trim();
                 if line.is_empty() || line.starts_with('#') {

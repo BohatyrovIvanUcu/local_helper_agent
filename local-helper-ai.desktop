@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Local Helper Mascot
+GenericName=AI Desktop Assistant
+Comment=Desktop AI Mascot Assistant powered by Tauri v2 and Gemini API
+Exec=/home/ivan/local_helper_ai/src-tauri/target/release/local-helper-ai
+Icon=/home/ivan/local_helper_ai/src-tauri/icons/128x128.png
+Terminal=false
+Categories=Utility;Development;Office;
+StartupNotify=false
