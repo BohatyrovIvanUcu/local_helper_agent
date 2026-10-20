@@ -227,8 +227,19 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let bin_name = args.first().map(|s| s.as_str()).unwrap_or("");
 
+    // На Windows підключаємо вивід у консоль батьківського процесу (cmd / PowerShell)
+    #[cfg(target_os = "windows")]
+    if args.len() > 1 || bin_name.ends_with("addkey") || bin_name.ends_with("addkey.exe") {
+        unsafe {
+            extern "system" {
+                fn AttachConsole(dw_process_id: u32) -> i32;
+            }
+            AttachConsole(!0u32);
+        }
+    }
+
     // Якщо бінарник або скрипт викликано як `addkey`
-    if bin_name.ends_with("addkey") {
+    if bin_name.ends_with("addkey") || bin_name.ends_with("addkey.exe") {
         handle_cli_addkey(args.get(1).cloned());
         return;
     }

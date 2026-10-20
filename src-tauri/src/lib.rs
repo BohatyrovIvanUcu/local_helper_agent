@@ -54,10 +54,17 @@ fn sanitize_relative_path(rel: &str) -> Result<PathBuf, String> {
     Ok(clean)
 }
 
-/// Повертає шлях до конфігураційного файлу користувача (~/.config/local-helper-ai/config.env).
+/// Повертає шлях до конфігураційного файлу користувача (~/.config/local-helper-ai/config.env або %APPDATA%/local-helper-ai/config.env).
 pub fn get_user_config_path() -> Result<PathBuf, String> {
     if let Ok(xdg) = env::var("XDG_CONFIG_HOME") {
         let trimmed = xdg.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed).join("local-helper-ai").join("config.env"));
+        }
+    }
+    #[cfg(target_os = "windows")]
+    if let Ok(appdata) = env::var("APPDATA") {
+        let trimmed = appdata.trim();
         if !trimmed.is_empty() {
             return Ok(PathBuf::from(trimmed).join("local-helper-ai").join("config.env"));
         }
@@ -232,6 +239,10 @@ fn get_env_or_dotenv(key: &str) -> Option<String> {
     let mut candidates = Vec::new();
     if let Ok(config_path) = get_user_config_path() {
         candidates.push(config_path);
+    }
+    #[cfg(target_os = "windows")]
+    if let Ok(appdata) = env::var("APPDATA") {
+        candidates.push(PathBuf::from(appdata).join("local-helper-ai").join("config.env"));
     }
     if let Ok(home) = get_home_dir() {
         candidates.push(home.join(".config/local-helper-ai/config.env"));

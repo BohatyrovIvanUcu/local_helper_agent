@@ -6,16 +6,13 @@
 
 ---
 
-## ⚡ Швидкий старт для користувачів (.deb пакет)
+## ⚡ Швидкий старт для користувачів
 
-Найпростіший спосіб користуватися Local Helper Mascot на **Ubuntu, Debian, Linux Mint** або будь-якому дистрибутиві на базі Debian.
+Усі версії програми збираються автоматично для **Linux, Windows та macOS** і доступні для завантаження у розділі **[GitHub Releases](https://github.com/BohatyrovIvanUcu/local_helper_agent/releases)** або в артефактах **[GitHub Actions](https://github.com/BohatyrovIvanUcu/local_helper_agent/actions)**.
 
 ### 1. Завантаження та встановлення
 
-Готовий `.deb` пакет можна:
-- Завантажити з розділу **[GitHub Releases](https://github.com/BohatyrovIvanUcu/local_helper_agent/releases)** або з артефактів автозбірки у вкладці **[GitHub Actions](https://github.com/BohatyrovIvanUcu/local_helper_agent/actions)**.
-- Або використати локальний файл з папки `releases/`:
-
+#### 🐧 Linux (Ubuntu / Debian / Linux Mint):
 ```bash
 # Встановлення deb-пакета
 sudo dpkg -i releases/local-helper-ai_0.1.0_amd64.deb
@@ -23,8 +20,15 @@ sudo dpkg -i releases/local-helper-ai_0.1.0_amd64.deb
 # Якщо системі потрібні залежності (GTK3 / WebKit2GTK):
 sudo apt-get install -f -y
 ```
+Після встановлення програма з'явиться у системному меню як **"Local Helper Mascot"**, а в терміналі будуть доступні команди `local-helper-ai` та `addkey`.
 
-Після встановлення програма з'явиться у вашому **системному меню додатків** як **"Local Helper Mascot"**, а в терміналі стануть доступні команди `local-helper-ai` та швидка утиліта `addkey`.
+#### 🪟 Windows (10 / 11):
+1. Завантажте файл `Local Helper Mascot_*_x64-setup.exe` з [Releases](https://github.com/BohatyrovIvanUcu/local_helper_agent/releases).
+2. Запустіть інсталятор. Програма створить ярлики в меню «Пуск» та на робочому столі.
+
+#### 🍏 macOS (Intel & Apple Silicon M-серія):
+1. Завантажте файл `.dmg` з [Releases](https://github.com/BohatyrovIvanUcu/local_helper_agent/releases).
+2. Відкрийте `.dmg` та перетягніть іконку маскота у папку **Applications** (Програми).
 
 ---
 
@@ -48,19 +52,26 @@ sudo apt-get install -f -y
 
 ## 💻 Налаштування через термінал (`addkey` та CLI)
 
-Після встановлення `.deb` пакета ви можете легко керувати всіма налаштуваннями прямо з терміналу:
+Після встановлення програми ви можете зручно керувати всіма налаштуваннями через термінал:
 
 ### 1. Додати або оновити Gemini API ключ:
 
-```bash
-# Швидке додавання ключа прямо в команді:
-addkey AIzaSyВаш_Ключ_З_Google_AI_Studio
+- **На Linux:**
+  ```bash
+  # Пряме додавання ключа:
+  addkey AIzaSyВаш_Ключ_З_Google_AI_Studio
 
-# Або виконайте команду без аргументів для інтерактивного вводу:
-addkey
-```
-
-*(Також працює альтернативний синтаксис: `local-helper-ai addkey <КЛЮЧ>`)*
+  # Або виконайте команду без аргументів для інтерактивного введення:
+  addkey
+  ```
+- **На Windows (PowerShell або CMD):**
+  ```powershell
+  local-helper-ai addkey AIzaSyВаш_Ключ
+  ```
+- **На macOS (Terminal):**
+  ```bash
+  local-helper-ai addkey AIzaSyВаш_Ключ
+  ```
 
 ### 2. Змінити модель Gemini:
 

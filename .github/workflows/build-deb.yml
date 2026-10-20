@@ -1,4 +1,4 @@
-name: Build and Release .deb
+name: Build and Release Multiplatform
 
 on:
   push:
@@ -12,17 +12,38 @@ permissions:
   contents: write
 
 jobs:
-  build-deb:
-    name: Build Debian (.deb) Package
-    runs-on: ubuntu-22.04
+  build:
+    name: Build (${{ matrix.platform.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - name: Linux (deb)
+            os: ubuntu-22.04
+            bundle: deb
+            artifact_pattern: src-tauri/target/release/bundle/deb/*.deb
+            artifact_name: local-helper-ai-linux-deb
+
+          - name: Windows (exe)
+            os: windows-latest
+            bundle: nsis
+            artifact_pattern: src-tauri/target/release/bundle/nsis/*.exe
+            artifact_name: local-helper-ai-windows-exe
+
+          - name: macOS (dmg)
+            os: macos-latest
+            bundle: dmg
+            artifact_pattern: src-tauri/target/release/bundle/dmg/*.dmg
+            artifact_name: local-helper-ai-macos-dmg
+
+    runs-on: ${{ matrix.platform.os }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -38,8 +59,6 @@ jobs:
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-gnu
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -55,21 +74,42 @@ jobs:
       - name: Install npm dependencies
         run: npm install
 
-      - name: Build Debian package
-        run: npm run build:deb
+      - name: Build frontend
+        run: npm run build
 
-      - name: Inspect generated package
-        run: |
-          ls -lh releases/
-          dpkg -c releases/local-helper-ai_0.1.0_amd64.deb
+      - name: Build Tauri bundle
+        run: npx tauri build --bundles ${{ matrix.platform.bundle }}
 
-      - name: Upload .deb package as artifact
+      - name: Upload platform artifact
         uses: actions/upload-artifact@v4
         with:
-          name: local-helper-ai-deb
-          path: releases/*.deb
+          name: ${{ matrix.platform.artifact_name }}
+          path: ${{ matrix.platform.artifact_pattern }}
           if-no-files-found: error
           retention-days: 30
+
+  release:
+    name: Publish Multiplatform Release
+    needs: build
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Organize release files
+        run: |
+          mkdir -p release-files
+          find release-artifacts -type f \( -name "*.deb" -o -name "*.exe" -o -name "*.dmg" \) -exec cp {} release-files/ \;
+          echo "Зібрані релізні файли:"
+          ls -lh release-files/
 
       - name: Determine tag and release title
         id: release_info
@@ -91,7 +131,7 @@ jobs:
           git tag -f "$TAG"
           git push origin -f "$TAG" || true
 
-      - name: Publish GitHub Release with .deb asset
+      - name: Publish GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -100,12 +140,12 @@ jobs:
           
           echo "Creating / updating release for $TAG ($TITLE)..."
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Реліз $TAG вже існує. Оновлюємо опис та бінарний файл .deb..."
-            gh release upload "$TAG" releases/*.deb --clobber
+            echo "Реліз $TAG вже існує. Оновлюємо файли та опис..."
+            gh release upload "$TAG" release-files/* --clobber
             gh release edit "$TAG" --title "$TITLE" --notes-file releases/RELEASE_TEMPLATE.md
           else
             echo "Створюємо новий GitHub Release $TAG..."
-            gh release create "$TAG" releases/*.deb \
+            gh release create "$TAG" release-files/* \
               --title "$TITLE" \
               --notes-file releases/RELEASE_TEMPLATE.md
           fi
