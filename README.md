@@ -12,10 +12,12 @@
 
 ### 1. Завантаження та встановлення
 
-Готовий `.deb` пакет знаходиться у репозиторії в папці `releases/`:
+Готовий `.deb` пакет можна:
+- Завантажити з розділу **[GitHub Releases](https://github.com/BohatyrovIvanUcu/local_helper_agent/releases)** або з артефактів автозбірки у вкладці **[GitHub Actions](https://github.com/BohatyrovIvanUcu/local_helper_agent/actions)**.
+- Або використати локальний файл з папки `releases/`:
 
 ```bash
-# Встановлення завантаженого deb-пакета
+# Встановлення deb-пакета
 sudo dpkg -i releases/local-helper-ai_0.1.0_amd64.deb
 
 # Якщо системі потрібні залежності (GTK3 / WebKit2GTK):
