@@ -100,12 +100,12 @@ jobs:
           
           echo "Creating / updating release for $TAG ($TITLE)..."
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Реліз $TAG вже існує. Оновлюємо бінарний файл .deb..."
+            echo "Реліз $TAG вже існує. Оновлюємо опис та бінарний файл .deb..."
             gh release upload "$TAG" releases/*.deb --clobber
-            gh release edit "$TAG" --title "$TITLE"
+            gh release edit "$TAG" --title "$TITLE" --notes-file releases/RELEASE_TEMPLATE.md
           else
             echo "Створюємо новий GitHub Release $TAG..."
             gh release create "$TAG" releases/*.deb \
               --title "$TITLE" \
-              --generate-notes
+              --notes-file releases/RELEASE_TEMPLATE.md
           fi
