@@ -6,9 +6,6 @@ on:
       - main
     tags:
       - 'v*'
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
@@ -22,6 +19,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Linux system dependencies
         run: |
@@ -72,12 +71,41 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: releases/*.deb
-          generate_release_notes: true
+      - name: Determine tag and release title
+        id: release_info
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${{ github.ref_name }}"
+          else
+            VERSION=$(node -p "require('./package.json').version")
+            TAG="v$VERSION"
+          fi
+          echo "TAG=$TAG" >> $GITHUB_OUTPUT
+          echo "TITLE=Local Helper Mascot $TAG" >> $GITHUB_OUTPUT
+
+      - name: Create or update Git Tag
+        run: |
+          TAG="${{ steps.release_info.outputs.TAG }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f "$TAG"
+          git push origin -f "$TAG" || true
+
+      - name: Publish GitHub Release with .deb asset
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+        run: |
+          TAG="${{ steps.release_info.outputs.TAG }}"
+          TITLE="${{ steps.release_info.outputs.TITLE }}"
+          
+          echo "Creating / updating release for $TAG ($TITLE)..."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Реліз $TAG вже існує. Оновлюємо бінарний файл .deb..."
+            gh release upload "$TAG" releases/*.deb --clobber
+            gh release edit "$TAG" --title "$TITLE"
+          else
+            echo "Створюємо новий GitHub Release $TAG..."
+            gh release create "$TAG" releases/*.deb \
+              --title "$TITLE" \
+              --generate-notes
+          fi
