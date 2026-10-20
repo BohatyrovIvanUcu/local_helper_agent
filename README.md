@@ -1,6 +1,6 @@
 # Local Helper Mascot 🤖🔨
 
-Десктопний локальний AI-асистент та анімований маскот на базі **Tauri v2 + React 18 (TypeScript) + Tailwind CSS + Framer Motion**, що використовує мультимодальний інтелект **Google Gemini 2.5 API** та виконує локальні операції на вашому комп'ютері через надійні асинхронні команди Rust.
+Десктопний локальний AI-асистент та анімований маскот на базі **Tauri v2 + React 18 (TypeScript) + Tailwind CSS + Framer Motion**, що використовує мультимодальний інтелект **Google Gemini API** (`gemini-3.5-flash-lite` за замовчуванням) та виконує локальні операції на вашому комп'ютері через надійні асинхронні команди Rust.
 
 ![Mascot Preview](public/mascot/idle.png)
 
@@ -64,14 +64,17 @@ addkey
 
 ### 2. Змінити модель Gemini:
 
-За замовчуванням використовується швидка мультимодальна модель `gemini-2.5-flash`. Ви можете перемкнути її на будь-яку іншу:
+За замовчуванням використовується модель `gemini-3.5-flash-lite`. Ви можете перемкнути її на будь-яку іншу:
 
 ```bash
 # Перемкнути на флагманську модель для складних міркувань:
 local-helper-ai set-model gemini-2.5-pro
 
-# Повернути швидку модель:
+# Перемкнути на повнорозмірну модель Flash:
 local-helper-ai set-model gemini-2.5-flash
+
+# Повернути модель за замовчуванням:
+local-helper-ai set-model gemini-3.5-flash-lite
 ```
 
 ### 3. Підключити сховище нотаток Obsidian (Obsidian Vault):
@@ -95,7 +98,7 @@ local-helper-ai config
 ==================================================
 📁 Файл конфігурації : /home/user/.config/local-helper-ai/config.env
 🔑 Gemini API Key    : AIzaSy...xxxx (Встановлено ✅)
-🧠 Модель Gemini     : gemini-2.5-flash
+🧠 Модель Gemini     : gemini-3.5-flash-lite
 📝 Obsidian Vault    : /home/user/Documents/Obsidian/MyVault ✅
 ==================================================
 ```
