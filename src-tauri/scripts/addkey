@@ -1,0 +1,11 @@
+#!/bin/sh
+# Допоміжний скрипт для швидкого встановлення або перевірки Gemini API ключа
+if command -v local-helper-ai >/dev/null 2>&1; then
+    exec local-helper-ai addkey "$@"
+elif [ -x /usr/bin/local-helper-ai ]; then
+    exec /usr/bin/local-helper-ai addkey "$@"
+else
+    echo "❌ Помилка: local-helper-ai не знайдено у PATH або /usr/bin" >&2
+    exit 1
+fi
+

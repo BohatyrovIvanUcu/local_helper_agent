@@ -14,8 +14,26 @@ export type WorkingToolName =
   | "read_file_or_dir"
   | "run_cli_command";
 
-const DEFAULT_MODEL =
-  import.meta.env.VITE_GEMINI_MODEL?.trim() || "gemini-3.5-flash-lite";
+export interface AppConfig {
+  gemini_api_key: string;
+  gemini_model: string;
+  obsidian_vault_path: string;
+  config_file_path: string;
+}
+
+export async function getAppConfig(): Promise<AppConfig> {
+  try {
+    return await invoke<AppConfig>("get_app_config");
+  } catch {
+    return {
+      gemini_api_key: import.meta.env.VITE_GEMINI_API_KEY?.trim() || "",
+      gemini_model:
+        import.meta.env.VITE_GEMINI_MODEL?.trim() || "gemini-2.5-flash",
+      obsidian_vault_path: "",
+      config_file_path: "",
+    };
+  }
+}
 
 function getSystemInstruction(): string {
   const now = new Date();
@@ -217,6 +235,13 @@ async function executeLocalRustTool(
   }
 }
 
+export interface MediaAttachment {
+  mimeType: string;
+  base64Data: string;
+  previewUrl?: string;
+  name?: string;
+}
+
 export interface AskMascotCallbacks {
   onStateChange: (state: MascotState, activeTool?: WorkingToolName) => void;
 }
@@ -226,26 +251,73 @@ const MAX_HISTORY_ITEMS = 12;
 
 export async function askMascot(
   userPrompt: string,
-  callbacks: AskMascotCallbacks
+  callbacks: AskMascotCallbacks,
+  attachments: MediaAttachment[] = []
 ): Promise<string> {
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY?.trim();
+  const config = await getAppConfig();
+  const apiKey =
+    config.gemini_api_key?.trim() ||
+    import.meta.env.VITE_GEMINI_API_KEY?.trim();
+
   if (!apiKey) {
     throw new Error(
-      "Відсутній VITE_GEMINI_API_KEY у файлі .env. Додайте ключ і перезапустіть застосунок."
+      "🔑 Не знайдено Gemini API ключ!\nБудь ласка, введіть у терміналі:\naddkey <ВАШ_КЛЮЧ>\nабо: local-helper-ai addkey <ВАШ_КЛЮЧ>"
     );
   }
+
+  const effectiveModel =
+    config.gemini_model?.trim() ||
+    import.meta.env.VITE_GEMINI_MODEL?.trim() ||
+    "gemini-2.5-flash";
 
   const ai = new GoogleGenAI({ apiKey });
 
   callbacks.onStateChange("THINKING");
 
+  const userParts: Part[] = [];
+
+  for (const item of attachments) {
+    userParts.push({
+      inlineData: {
+        mimeType: item.mimeType,
+        data: item.base64Data,
+      },
+    });
+  }
+
+  const trimmedPrompt = userPrompt.trim();
+  const hasAudio = attachments.some((a) => a.mimeType.startsWith("audio/"));
+  const hasImage = attachments.some((a) => a.mimeType.startsWith("image/"));
+
+  const effectiveText =
+    trimmedPrompt ||
+    (hasAudio && hasImage
+      ? "Прослухай голосову інструкцію, проаналізуй прикріплене зображення та виконай потрібну дію."
+      : hasAudio
+      ? "Уважно прослухай голосове повідомлення користувача українською мовою та виконай запитану дію (наприклад, запиши задачу чи ідею в Obsidian або дай лаконічну відповідь)."
+      : hasImage
+      ? "Проаналізуй це зображення. Якщо на ньому задачі, дедлайни чи ідеї — додай їх у відповідну секцію Obsidian, інакше коротко поясни суть."
+      : "");
+
+  if (effectiveText) {
+    userParts.push({ text: effectiveText });
+  }
+
   const contents: Content[] = [
     ...chatHistory,
     {
       role: "user",
-      parts: [{ text: userPrompt }],
+      parts: userParts,
     },
   ];
+
+  const historySummaryText = [
+    hasImage ? "[Прикріплено зображення]" : "",
+    hasAudio ? "[Голосове повідомлення]" : "",
+    trimmedPrompt,
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   const MAX_TOOL_TURNS = 5;
   let turn = 0;
@@ -254,7 +326,7 @@ export async function askMascot(
     turn += 1;
 
     const response = await ai.models.generateContent({
-      model: DEFAULT_MODEL,
+      model: effectiveModel,
       contents,
       config: {
         systemInstruction: getSystemInstruction(),
@@ -270,7 +342,7 @@ export async function askMascot(
         response.text?.trim() || "Готово! Завдання виконано.";
 
       chatHistory.push(
-        { role: "user", parts: [{ text: userPrompt }] },
+        { role: "user", parts: [{ text: historySummaryText || effectiveText }] },
         { role: "model", parts: [{ text: replyText }] }
       );
       if (chatHistory.length > MAX_HISTORY_ITEMS) {

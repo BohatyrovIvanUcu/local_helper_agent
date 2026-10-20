@@ -41,7 +41,14 @@
       "icons/128x128@2x.png",
       "icons/icon.ico",
       "icons/icon.png"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "files": {
+          "usr/bin/addkey": "scripts/addkey"
+        }
+      }
+    }
   }
 }
 

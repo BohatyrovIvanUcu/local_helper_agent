@@ -8,7 +8,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "GDK_BACKEND=x11 tauri",
-    "build:app": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri build --no-bundle"
+    "build:app": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri build --no-bundle",
+    "build:deb": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri build --bundles deb && mkdir -p releases && cp 'src-tauri/target/release/bundle/deb/Local Helper Mascot_0.1.0_amd64.deb' 'releases/local-helper-ai_0.1.0_amd64.deb'"
   },
   "dependencies": {
     "@google/genai": "^1.0.0",

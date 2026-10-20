@@ -1717,6 +1717,8 @@ name = "local-helper-ai"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "gdk",
+ "gtk",
  "serde",
  "serde_json",
  "tauri",

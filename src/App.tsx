@@ -30,59 +30,88 @@ const TOOL_LABELS: Record<WorkingToolName, string> = {
   run_cli_command: "Виконую команду...",
 };
 
+interface ClipboardImagePayload {
+  mime_type: string;
+  base64_data: string;
+  name: string;
+}
+
 const MAX_IMAGE_DIMENSION = 1280;
 
 async function compressImageFile(file: File): Promise<MediaAttachment> {
   return new Promise((resolve, reject) => {
-    const objectUrl = URL.createObjectURL(file);
-    const img = new Image();
+    const reader = new FileReader();
 
-    img.onload = () => {
-      URL.revokeObjectURL(objectUrl);
-      let { width, height } = img;
+    reader.onerror = () => {
+      reject(new Error("Не вдалося зчитати файл зображення."));
+    };
 
-      if (width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION) {
+    reader.onload = (e) => {
+      const dataUrl = e.target?.result as string;
+      if (!dataUrl) {
+        reject(new Error("Порожні дані зображення."));
+        return;
+      }
+
+      const commaIdx = dataUrl.indexOf(",");
+      const fallbackBase64 = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl;
+      const detectedMime = file.type || "image/png";
+
+      const fallbackAttachment: MediaAttachment = {
+        mimeType: detectedMime,
+        base64Data: fallbackBase64,
+        previewUrl: dataUrl,
+        name: file.name || "image.png",
+      };
+
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width <= MAX_IMAGE_DIMENSION && height <= MAX_IMAGE_DIMENSION) {
+          resolve(fallbackAttachment);
+          return;
+        }
+
         const ratio = Math.min(
           MAX_IMAGE_DIMENSION / width,
           MAX_IMAGE_DIMENSION / height
         );
         width = Math.max(1, Math.round(width * ratio));
         height = Math.max(1, Math.round(height * ratio));
-      }
 
-      const canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext("2d");
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
 
-      if (!ctx) {
-        reject(new Error("Не вдалося ініціалізувати Canvas для стиснення фото."));
-        return;
-      }
+        if (!ctx) {
+          resolve(fallbackAttachment);
+          return;
+        }
 
-      ctx.drawImage(img, 0, 0, width, height);
-      const outputMime =
-        file.type === "image/png" && width <= 800 && height <= 800
-          ? "image/png"
-          : "image/jpeg";
-      const dataUrl = canvas.toDataURL(outputMime, 0.85);
-      const commaIdx = dataUrl.indexOf(",");
-      const base64Data = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl;
+        ctx.drawImage(img, 0, 0, width, height);
+        const outputMime = file.type === "image/png" ? "image/png" : "image/jpeg";
+        const resizedDataUrl = canvas.toDataURL(outputMime, 0.85);
+        const resizedComma = resizedDataUrl.indexOf(",");
+        const resizedBase64 =
+          resizedComma >= 0 ? resizedDataUrl.slice(resizedComma + 1) : resizedDataUrl;
 
-      resolve({
-        mimeType: outputMime,
-        base64Data,
-        previewUrl: dataUrl,
-        name: file.name || "image.jpg",
-      });
+        resolve({
+          mimeType: outputMime,
+          base64Data: resizedBase64,
+          previewUrl: resizedDataUrl,
+          name: file.name || "image.jpg",
+        });
+      };
+
+      img.onerror = () => {
+        resolve(fallbackAttachment);
+      };
+
+      img.src = dataUrl;
     };
 
-    img.onerror = () => {
-      URL.revokeObjectURL(objectUrl);
-      reject(new Error("Не вдалося завантажити вибране зображення."));
-    };
-
-    img.src = objectUrl;
+    reader.readAsDataURL(file);
   });
 }
 
@@ -189,10 +218,11 @@ export default function App() {
   const bubbleTimerRef = useRef<number | null>(null);
   const recordingTimerRef = useRef<number | null>(null);
 
-  // Зберігає координату вікна до авто-зсуву біля нижнього краю екрана
+  // Зберігає координату вікна до авто-зсуву біля країв екрана (низ та правий край)
   const shiftedPosRef = useRef<{
-    x: number;
+    origX: number;
     origY: number;
+    shiftedX: number;
     shiftedY: number;
   } | null>(null);
 
@@ -223,37 +253,50 @@ export default function App() {
   const displayedBubble = statusBanner ?? bubbleText;
   const isPopupActive = isInputOpen || Boolean(displayedBubble);
 
-  // Ідея 2: Авто-зсув вікна вгору, якщо воно стоїть біля самого низу екрана і відкривається інпут/бабл
+  // Авто-зсув вікна, якщо воно стоїть біля низу або правого краю екрана і відкривається інпут/хмаринка
   useEffect(() => {
     let cancelled = false;
 
-    const adjustWindowNearBottom = async () => {
+    const adjustWindowNearEdges = async () => {
       try {
         const win = getCurrentWindow();
         if (isPopupActive) {
-          const [pos, size, monitor] = await Promise.all([
+          const [pos, monitor] = await Promise.all([
             win.outerPosition(),
-            win.outerSize(),
             currentMonitor(),
           ]);
           if (cancelled || !monitor) return;
 
           const monitorBottom = monitor.position.y + monitor.size.height;
-          const bottomSafeMargin = 48;
-          const maxAllowedY = monitorBottom - size.height - bottomSafeMargin;
+          const monitorRight = monitor.position.x + monitor.size.width;
 
-          if (pos.y > maxAllowedY) {
-            const targetY = Math.max(monitor.position.y + 16, maxAllowedY);
+          // Ліміт по нижньому краю
+          const maxAllowedY = monitorBottom - 180;
+          const targetY =
+            pos.y > maxAllowedY ? Math.max(monitor.position.y + 16, maxAllowedY) : pos.y;
+
+          // Ліміт по правому краю (ширина вікна 280px + безпечний відступ 12px)
+          const windowWidth = 280;
+          const rightSafeMargin = 12;
+          const maxAllowedX = monitorRight - windowWidth - rightSafeMargin;
+          const minAllowedX = monitor.position.x + 12;
+          const targetX = Math.max(minAllowedX, Math.min(pos.x, maxAllowedX));
+
+          const needsShift = targetX !== pos.x || targetY !== pos.y;
+
+          if (needsShift) {
             if (!shiftedPosRef.current) {
               shiftedPosRef.current = {
-                x: pos.x,
+                origX: pos.x,
                 origY: pos.y,
+                shiftedX: targetX,
                 shiftedY: targetY,
               };
             } else {
+              shiftedPosRef.current.shiftedX = targetX;
               shiftedPosRef.current.shiftedY = targetY;
             }
-            await win.setPosition(new PhysicalPosition(pos.x, targetY));
+            await win.setPosition(new PhysicalPosition(targetX, targetY));
           }
         } else if (shiftedPosRef.current) {
           const saved = shiftedPosRef.current;
@@ -262,10 +305,10 @@ export default function App() {
           if (cancelled) return;
 
           if (
-            Math.abs(pos.x - saved.x) <= 20 &&
+            Math.abs(pos.x - saved.shiftedX) <= 20 &&
             Math.abs(pos.y - saved.shiftedY) <= 20
           ) {
-            await win.setPosition(new PhysicalPosition(pos.x, saved.origY));
+            await win.setPosition(new PhysicalPosition(saved.origX, saved.origY));
           }
         }
       } catch {
@@ -273,7 +316,7 @@ export default function App() {
       }
     };
 
-    void adjustWindowNearBottom();
+    void adjustWindowNearEdges();
     return () => {
       cancelled = true;
     };
@@ -346,13 +389,16 @@ export default function App() {
   }, []);
 
   const attachFile = async (file: File) => {
-    if (!file.type.startsWith("image/")) {
+    const isImageMime = Boolean(file.type && file.type.startsWith("image/"));
+    const isImageExt = /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(file.name);
+    if (!isImageMime && !isImageExt) {
       setBubbleText("Підтримуються лише файли зображень (PNG, JPG, WebP).");
       return;
     }
     try {
       const compressed = await compressImageFile(file);
       setAttachedImage(compressed);
+      setBubbleText("Фото прикріплено! 📸");
       setPhotoPop(true);
       window.setTimeout(() => setPhotoPop(false), 850);
       if (!isInputOpen) {
@@ -366,28 +412,161 @@ export default function App() {
     }
   };
 
-  // Глобальна підтримка Ctrl+V (навіть якщо інпут закритий — відкриває й прикріплює)
-  useEffect(() => {
-    const handleGlobalPaste = (e: ClipboardEvent) => {
-      const items = e.clipboardData?.items;
-      if (!items) return;
+  const pasteLockRef = useRef<number>(0);
 
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        if (item.type.startsWith("image/")) {
-          const file = item.getAsFile();
-          if (file) {
+  const applyClipboardImage = (res: ClipboardImagePayload) => {
+    setAttachedImage({
+      mimeType: res.mime_type,
+      base64Data: res.base64_data,
+      previewUrl: `data:${res.mime_type};base64,${res.base64_data}`,
+      name: res.name,
+    });
+    setBubbleText("Фото прикріплено! 📸");
+    setPhotoPop(true);
+    window.setTimeout(() => setPhotoPop(false), 850);
+    if (!isInputOpen) {
+      setIsInputOpen(true);
+    }
+    window.setTimeout(() => inputRef.current?.focus(), 60);
+  };
+
+  const handlePasteEvent = async (
+    e: React.ClipboardEvent | ClipboardEvent
+  ) => {
+    const now = Date.now();
+    if (now - pasteLockRef.current < 350) return;
+
+    const clipboardData = "clipboardData" in e ? e.clipboardData : null;
+    if (clipboardData) {
+      // 1. Прямі файли з буфера обміну
+      const files = clipboardData.files;
+      if (files && files.length > 0) {
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          if (
+            (file.type && file.type.startsWith("image/")) ||
+            /\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name)
+          ) {
+            pasteLockRef.current = Date.now();
             e.preventDefault();
             void attachFile(file);
-            break;
+            return;
           }
         }
       }
+
+      // 2. Елементи буфера (скріншоти з пам'яті / PrintScreen / Copy Image)
+      const items = clipboardData.items;
+      if (items && items.length > 0) {
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          if (item.type.startsWith("image/")) {
+            const file = item.getAsFile();
+            if (file) {
+              pasteLockRef.current = Date.now();
+              e.preventDefault();
+              void attachFile(file);
+              return;
+            }
+          }
+        }
+      }
+
+      // 3. Текстовий вміст буфера (копіювання файлу в Nautilus / файловому менеджері)
+      const uriList = clipboardData.getData("text/uri-list") || "";
+      const gnomeFiles =
+        clipboardData.getData("x-special/gnome-copied-files") || "";
+      const plainText = clipboardData.getData("text/plain") || "";
+      const combined = `${uriList}\n${gnomeFiles}\n${plainText}`.trim();
+      if (combined) {
+        const lines = combined.split("\n");
+        for (const rawLine of lines) {
+          let clean = rawLine.trim();
+          if (clean.startsWith("copy") || clean.startsWith("cut")) {
+            clean = clean.replace(/^(copy|cut)\s*/, "").trim();
+          }
+          clean = clean.replace(/^file:\/\//, "");
+          try {
+            clean = decodeURIComponent(clean);
+          } catch {}
+          if (/\.(png|jpe?g|webp|gif|bmp)$/i.test(clean)) {
+            pasteLockRef.current = Date.now();
+            e.preventDefault();
+            try {
+              const base64Data = await invoke<string>("read_image_base64", {
+                filepath: clean,
+              });
+              const mime = clean.endsWith(".png") ? "image/png" : "image/jpeg";
+              applyClipboardImage({
+                mime_type: mime,
+                base64_data: base64Data,
+                name: clean.split("/").pop() || "image.png",
+              });
+              return;
+            } catch {
+              // Якщо шлях недоступний, пробуємо через read_clipboard_image
+            }
+          }
+        }
+        // Якщо користувач вставляє звичайний текст (не шлях до зображення), не блокуємо стандартну вставку тексту
+        if (plainText.trim().length > 0 && !uriList.trim() && !gnomeFiles.trim()) {
+          pasteLockRef.current = Date.now();
+          return;
+        }
+      }
+    }
+
+    // 4. Вбудоване читання системного буфера через GTK (без зовнішніх утиліт)
+    pasteLockRef.current = Date.now();
+    try {
+      const res = await invoke<ClipboardImagePayload | null>(
+        "read_clipboard_image"
+      );
+      if (res) {
+        e.preventDefault();
+        applyClipboardImage(res);
+      }
+    } catch {}
+  };
+
+  // Глобальна підтримка Ctrl+V (перехоплює на будь-якій розкладці: EN / UA)
+  useEffect(() => {
+    const onDocPaste = (e: ClipboardEvent) => {
+      void handlePasteEvent(e);
     };
 
-    window.addEventListener("paste", handleGlobalPaste);
-    return () => window.removeEventListener("paste", handleGlobalPaste);
-  }, []);
+    const onKeyDown = async (e: KeyboardEvent) => {
+      const isPasteKey =
+        (e.ctrlKey || e.metaKey) &&
+        (e.code === "KeyV" ||
+          e.key === "v" ||
+          e.key === "V" ||
+          e.key === "м" ||
+          e.key === "М");
+
+      if (isPasteKey && document.activeElement !== inputRef.current) {
+        const now = Date.now();
+        if (now - pasteLockRef.current < 350) return;
+        pasteLockRef.current = now;
+        try {
+          const res = await invoke<ClipboardImagePayload | null>(
+            "read_clipboard_image"
+          );
+          if (res) {
+            e.preventDefault();
+            applyClipboardImage(res);
+          }
+        } catch {}
+      }
+    };
+
+    window.addEventListener("paste", onDocPaste, true);
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("paste", onDocPaste, true);
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [isInputOpen]);
 
   // Обробка перетягування вікна vs короткого кліку по маскоту
   const handleMascotMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -579,6 +758,7 @@ export default function App() {
 
   return (
     <div
+      onPaste={(e) => void handlePasteEvent(e)}
       onDragEnter={(e) => {
         e.preventDefault();
         setIsDraggingFile(true);
@@ -737,6 +917,7 @@ export default function App() {
               exit={{ opacity: 0, y: -4, scale: 0.95 }}
               transition={{ duration: 0.18, ease: "easeOut" }}
               onSubmit={handleSubmit}
+              onPaste={(e) => void handlePasteEvent(e)}
               className="mt-0.5 flex w-full flex-col gap-1.5 rounded-xl border border-zinc-700/60 bg-zinc-900/90 px-2.5 py-2 shadow-lg backdrop-blur-md"
             >
               {/* Прев'ю прикріпленого зображення з анімацією та статусом */}
@@ -821,6 +1002,7 @@ export default function App() {
                     value={prompt}
                     onChange={(e) => setPrompt(e.target.value)}
                     onKeyDown={handleKeyDown}
+                    onPaste={(e) => void handlePasteEvent(e)}
                     disabled={isBusy}
                     placeholder={
                       attachedImage ? "Додати підпис..." : "Що зробити?"
