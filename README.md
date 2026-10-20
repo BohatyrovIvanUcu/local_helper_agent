@@ -67,11 +67,8 @@ addkey
 За замовчуванням використовується модель `gemini-3.5-flash-lite`. Ви можете перемкнути її на будь-яку іншу:
 
 ```bash
-# Перемкнути на флагманську модель для складних міркувань:
-local-helper-ai set-model gemini-2.5-pro
-
 # Перемкнути на повнорозмірну модель Flash:
-local-helper-ai set-model gemini-2.5-flash
+local-helper-ai set-model gemini-3.8-flash
 
 # Повернути модель за замовчуванням:
 local-helper-ai set-model gemini-3.5-flash-lite
