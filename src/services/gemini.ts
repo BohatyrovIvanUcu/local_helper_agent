@@ -28,7 +28,7 @@ export async function getAppConfig(): Promise<AppConfig> {
     return {
       gemini_api_key: import.meta.env.VITE_GEMINI_API_KEY?.trim() || "",
       gemini_model:
-        import.meta.env.VITE_GEMINI_MODEL?.trim() || "gemini-2.5-flash",
+        import.meta.env.VITE_GEMINI_MODEL?.trim() || "gemini-3.5-flash-lite",
       obsidian_vault_path: "",
       config_file_path: "",
     };
@@ -268,7 +268,7 @@ export async function askMascot(
   const effectiveModel =
     config.gemini_model?.trim() ||
     import.meta.env.VITE_GEMINI_MODEL?.trim() ||
-    "gemini-2.5-flash";
+    "gemini-3.5-flash-lite";
 
   const ai = new GoogleGenAI({ apiKey });
 

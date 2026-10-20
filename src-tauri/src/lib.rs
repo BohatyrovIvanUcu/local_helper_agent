@@ -81,7 +81,7 @@ pub fn read_app_config() -> AppConfig {
         .unwrap_or_default();
     let model = get_env_or_dotenv("GEMINI_MODEL")
         .or_else(|| get_env_or_dotenv("VITE_GEMINI_MODEL"))
-        .unwrap_or_else(|| "gemini-2.5-flash".to_string());
+        .unwrap_or_else(|| "gemini-3.5-flash-lite".to_string());
     let vault = get_env_or_dotenv("OBSIDIAN_VAULT_PATH").unwrap_or_default();
     let config_path = get_user_config_path()
         .map(|p| p.to_string_lossy().to_string())

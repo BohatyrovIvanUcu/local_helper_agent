@@ -13,7 +13,7 @@ fn print_help() {
 
 КОМАНДИ НАЛАШТУВАННЯ:
   addkey [КЛЮЧ]              Встановити ключ Gemini API (або ввести інтерактивно)
-  set-model [МОДЕЛЬ]         Встановити модель Gemini (наприклад: gemini-2.5-flash)
+  set-model [МОДЕЛЬ]         Встановити модель Gemini (наприклад: gemini-3.5-flash-lite)
   set-vault [ШЛЯХ]           Встановити шлях до Obsidian Vault (наприклад: ~/Documents/Notes)
   set <ПАРАМЕТР> <ЗНАЧЕННЯ>  Встановити будь-який параметр у файлі конфігурації
   config                     Переглянути поточні налаштування та шлях до файлу конфігурації
@@ -23,7 +23,7 @@ fn print_help() {
 ПРИКЛАДИ:
   addkey AIzaSyDxxxxxxxxxxxxxxxxxxxxxxxx
   local-helper-ai addkey AIzaSyDxxxxxxxxxxxxxxxxxxxxxxxx
-  local-helper-ai set-model gemini-2.5-flash
+  local-helper-ai set-model gemini-3.5-flash-lite
   local-helper-ai set-vault ~/Documents/Obsidian
   local-helper-ai config
 
@@ -87,9 +87,9 @@ fn handle_cli_set_model(maybe_model: Option<String>) {
   local-helper-ai set-model <МОДЕЛЬ>   Встановити модель Gemini
 
 Рекомендовані моделі:
-  - gemini-2.5-flash (швидка, підтримує аудіо та зображення)
-  - gemini-2.5-pro   (максимальна якість міркувань)
-  - gemini-1.5-flash (попередня стабільна версія)"#
+  - gemini-3.5-flash-lite (за замовчуванням: надшвидка та легка)
+  - gemini-2.5-flash      (швидка мультимодальна)
+  - gemini-2.5-pro        (максимальна якість міркувань)"#
             );
             return;
         }
@@ -98,7 +98,7 @@ fn handle_cli_set_model(maybe_model: Option<String>) {
     let model = match maybe_model {
         Some(m) if !m.trim().is_empty() => m.trim().to_string(),
         _ => {
-            println!("🧠 Введіть назву моделі Gemini (наприклад: gemini-2.5-flash або gemini-1.5-pro):");
+            println!("🧠 Введіть назву моделі Gemini (наприклад: gemini-3.5-flash-lite або gemini-2.5-flash):");
             print!("> ");
             let _ = io::stdout().flush();
             let mut input = String::new();
