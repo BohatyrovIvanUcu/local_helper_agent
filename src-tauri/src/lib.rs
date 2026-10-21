@@ -1,15 +1,18 @@
-use chrono::Local;
+use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveDateTime, NaiveTime, TimeZone};
 use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
+
+static LAST_KNOWN_MUSIC_PLAYING: AtomicBool = AtomicBool::new(false);
 use std::thread;
 use std::time::Duration;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    Manager,
+    Emitter, Manager,
 };
 
 const MAX_READ_CHARS: usize = 8_000;
@@ -1512,60 +1515,121 @@ except Exception:
     false
 }
 
+fn open_browser_detached(url: &str) {
+    #[cfg(target_os = "windows")]
+    let _ = Command::new("cmd")
+        .args(["/C", "start", url])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+
+    #[cfg(target_os = "macos")]
+    let _ = Command::new("open")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+
+    #[cfg(target_os = "linux")]
+    let _ = Command::new("xdg-open")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+}
+
 fn open_and_play_query(query: &str) -> Result<String, String> {
-    let py_search = r#"
-import sys, urllib.request, urllib.parse, re, subprocess
+    let clean = query.trim();
+    let lower = clean.to_lowercase();
+
+    // 1. Миттєве визначення URL для стандартних плейлистів без спавну сторонніх процесів
+    let (play_url, reply_msg) = if clean.is_empty()
+        || lower == "liked"
+        || lower == "liked_music"
+        || lower == "лайки"
+        || lower == "мої лайки"
+        || lower == "улюблені"
+        || lower == "улюблена музика"
+        || lower == "мій плейлист"
+        || lower == "моя музика"
+        || lower.contains("сподобалась")
+    {
+        (
+            "https://music.youtube.com/watch?list=LM&index=1".to_string(),
+            "Вмикаю твій плейлист 'Музика, яка сподобалась' у YouTube Music 🎵".to_string(),
+        )
+    } else if lower == "my_mix"
+        || lower == "mix"
+        || lower == "рекомендації"
+        || lower == "мікс"
+        || lower == "мої рекомендації"
+        || lower == "супермікс"
+        || lower.contains("рекомендац")
+    {
+        (
+            "https://music.youtube.com/watch?list=RDMM".to_string(),
+            "Вмикаю твій персональний мікс рекомендацій у YouTube Music 🎵".to_string(),
+        )
+    } else if clean.starts_with("http://") || clean.starts_with("https://") {
+        let mut url = clean.to_string();
+        if url.contains("playlist?list=") {
+            url = url.replace("playlist?list=", "watch?list=");
+        }
+        if url.contains("watch?list=") && !url.contains("&index=") && !url.contains("&v=") {
+            url.push_str("&index=1");
+        }
+        (url, "Відкриваю вказане медіа-посилання 🎵".to_string())
+    } else {
+        // Довільний запит (назва пісні / виконавця) — швидко знаходимо прямий video id без відкриття браузера
+        let py_search = r#"
+import sys, urllib.request, urllib.parse, re
 
 raw = sys.argv[1].strip() if len(sys.argv) > 1 else ""
 play_url = None
-
-# 1. Пряме посилання на плейлист або трек (наприклад, https://music.youtube.com/playlist?list=LM)
-if raw.startswith("http://") or raw.startswith("https://"):
-    url = raw
-    if "playlist?list=" in url:
-        url = url.replace("playlist?list=", "watch?list=")
-    if "watch?list=" in url and "&index=" not in url and "&v=" not in url:
-        url += "&index=1"
-    play_url = url
-elif raw.lower() in ("liked", "liked_music", "лайки", "улюблені", "улюблена музика", "мій плейлист", "моя музика", "мої лайки", "музика яка сподобалась"):
-    play_url = "https://music.youtube.com/watch?list=LM&index=1"
-elif raw.lower() in ("my_mix", "mix", "рекомендації", "мікс", "мої рекомендації", "супермікс"):
-    play_url = "https://music.youtube.com/watch?list=RDMM"
-elif raw:
+if raw:
     try:
         q = urllib.parse.quote_plus(raw)
         url = f"https://www.youtube.com/results?search_query={q}"
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"})
-        html = urllib.request.urlopen(req, timeout=4).read().decode('utf-8', errors='ignore')
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
+        html = urllib.request.urlopen(req, timeout=3).read().decode('utf-8', errors='ignore')
         matches = re.findall(r"watch\?v=([a-zA-Z0-9_-]{11})", html)
         if matches:
-            vid = matches[0]
-            play_url = f"https://music.youtube.com/watch?v={vid}"
+            play_url = f"https://music.youtube.com/watch?v={matches[0]}"
     except Exception:
         pass
-    if not play_url:
-        play_url = f"https://music.youtube.com/search?q={urllib.parse.quote_plus(raw)}"
 
-# За замовчуванням відкриваємо персональний плейлист вподобань користувача (Liked Music) з першого треку!
 if not play_url:
-    play_url = "https://music.youtube.com/watch?list=LM&index=1"
+    play_url = f"https://music.youtube.com/search?q={urllib.parse.quote_plus(raw)}"
 
-if sys.platform == "win32":
-    subprocess.Popen(["cmd", "/C", "start", play_url])
-elif sys.platform == "darwin":
-    subprocess.Popen(["open", play_url])
-else:
-    subprocess.Popen(["xdg-open", play_url])
-
-print("OK:" + play_url)
+print("URL:" + play_url)
 "#;
+        let found_url = if let Ok(out) = Command::new("python3")
+            .args(["-c", py_search, clean])
+            .stdin(Stdio::null())
+            .output()
+        {
+            let s = String::from_utf8_lossy(&out.stdout);
+            s.lines()
+                .find(|l| l.starts_with("URL:"))
+                .map(|l| l.trim_start_matches("URL:").trim().to_string())
+        } else {
+            None
+        };
 
-    let res = Command::new("python3")
-        .args(["-c", py_search, query])
-        .output();
+        let final_url = found_url.unwrap_or_else(|| {
+            format!("https://music.youtube.com/search?q={}", clean)
+        });
 
-    // Запускаємо фонову перевірку: чекаємо повного завантаження вкладки та редіректу YouTube Music у Firefox/Chrome,
-    // перевіряємо MPRIS або надсилаємо натискання Space через /dev/uinput для обходу "Почати відтворення"
+        (final_url, format!("Увімкнено відтворення музики ('{}') 🎵", clean))
+    };
+
+    // 2. Запускаємо браузер повністю від'єднаним від Rust, щоб жодні дескриптори stdout/stderr не утримували виклик
+    open_browser_detached(&play_url);
+
+    // 3. У фоновому потоці через uinput та MPRIS знімаємо паузу/автоплей, якщо браузер заблокував старт
     std::thread::spawn(|| {
         std::thread::sleep(Duration::from_millis(2200));
         if resume_media_player() {
@@ -1579,33 +1643,8 @@ print("OK:" + play_url)
         }
     });
 
-    if let Ok(out) = res {
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        if stdout.contains("OK:") {
-            if query.is_empty() || query == "liked_music" || query.to_lowercase().contains("лайк") {
-                return Ok("Вмикаю твій плейлист 'Музика, яка сподобалась' у YouTube Music 🎵".to_string());
-            } else if query == "my_mix" || query.to_lowercase().contains("рекомендац") {
-                return Ok("Вмикаю твій персональний мікс рекомендацій у YouTube Music 🎵".to_string());
-            } else {
-                return Ok(format!("Увімкнено відтворення музики ('{}') 🎵", query));
-            }
-        }
-    }
-
-    let direct_url = if query.is_empty() || query == "liked_music" {
-        "https://music.youtube.com/watch?list=LM&index=1".to_string()
-    } else {
-        format!("https://music.youtube.com/search?q={}", query)
-    };
-
-    #[cfg(target_os = "windows")]
-    let _ = Command::new("cmd").args(["/C", "start", &direct_url]).spawn();
-    #[cfg(target_os = "macos")]
-    let _ = Command::new("open").arg(&direct_url).spawn();
-    #[cfg(target_os = "linux")]
-    let _ = Command::new("xdg-open").arg(&direct_url).spawn();
-
-    Ok("Відкриваю YouTube Music 🎵".to_string())
+    // 4. Миттєво повертаємо результат фронтенду!
+    Ok(reply_msg)
 }
 
 /// Керує відтворенням медіа: натискає Play/Pause на активному плеєрі або запускає прямий трек.
@@ -1621,17 +1660,23 @@ async fn control_media(action: String, query: Option<String>) -> Result<String, 
                 && (q == "liked_music" || q == "liked")
             {
                 if resume_media_player() {
+                    LAST_KNOWN_MUSIC_PLAYING.store(true, Ordering::Relaxed);
                     return Ok("Продовжую відтворення музики ▶️".to_string());
                 }
             }
 
             if action_clean == "play_query" || action_clean == "open_and_play" || (action_clean == "play" && !q.is_empty()) {
-                return open_and_play_query(q);
+                let res = open_and_play_query(q);
+                if res.is_ok() {
+                    LAST_KNOWN_MUSIC_PLAYING.store(true, Ordering::Relaxed);
+                }
+                return res;
             }
         }
 
         if action_clean == "pause" {
             let handled = pause_media_player();
+            LAST_KNOWN_MUSIC_PLAYING.store(false, Ordering::Relaxed);
             if handled {
                 return Ok("Музику поставлено на паузу ⏸️".to_string());
             } else {
@@ -1641,6 +1686,7 @@ async fn control_media(action: String, query: Option<String>) -> Result<String, 
 
         if action_clean == "next" {
             let handled = next_media_player();
+            LAST_KNOWN_MUSIC_PLAYING.store(true, Ordering::Relaxed);
             if handled {
                 return Ok("Увімкнено наступний трек ⏭️".to_string());
             } else {
@@ -1650,6 +1696,7 @@ async fn control_media(action: String, query: Option<String>) -> Result<String, 
 
         if action_clean == "prev" || action_clean == "previous" {
             let handled = prev_media_player();
+            LAST_KNOWN_MUSIC_PLAYING.store(true, Ordering::Relaxed);
             if handled {
                 return Ok("Увімкнено попередній трек ⏮️".to_string());
             } else {
@@ -1661,14 +1708,92 @@ async fn control_media(action: String, query: Option<String>) -> Result<String, 
         // 1. Спочатку пробуємо відновити вже відкритий плеєр у системі (браузер YouTube Music / Spotify тощо)
         let resumed = resume_media_player();
         if resumed {
+            LAST_KNOWN_MUSIC_PLAYING.store(true, Ordering::Relaxed);
             return Ok("Продовжую відтворення музики ▶️".to_string());
         }
 
         // 2. Якщо плеєр не був активний — вмикаємо особистий плейлист уподобань користувача (Liked Music)
-        open_and_play_query("liked_music")
+        let res = open_and_play_query("liked_music");
+        if res.is_ok() {
+            LAST_KNOWN_MUSIC_PLAYING.store(true, Ordering::Relaxed);
+        }
+        res
     })
     .await
     .map_err(|e| format!("Помилка обробки медіа: {}", e))?
+}
+
+fn check_is_music_playing() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let py_code = r#"
+import sys
+try:
+    import dbus
+    bus = dbus.SessionBus()
+    found_any = False
+    for p in bus.list_names():
+        if p.startswith('org.mpris.MediaPlayer2.'):
+            found_any = True
+            try:
+                obj = bus.get_object(p, '/org/mpris/MediaPlayer2')
+                props = dbus.Interface(obj, 'org.freedesktop.DBus.Properties')
+                status = str(props.Get('org.mpris.MediaPlayer2.Player', 'PlaybackStatus', dbus_interface='org.freedesktop.DBus.Properties'))
+                if status.lower() == 'playing':
+                    sys.exit(0)
+            except Exception:
+                pass
+    if found_any:
+        sys.exit(2)
+except Exception:
+    pass
+sys.exit(1)
+"#;
+        if let Ok(status) = Command::new("python3")
+            .args(["-c", py_code])
+            .stdin(Stdio::null())
+            .status()
+        {
+            if status.code() == Some(0) {
+                LAST_KNOWN_MUSIC_PLAYING.store(true, Ordering::Relaxed);
+                return true;
+            } else if status.code() == Some(2) {
+                LAST_KNOWN_MUSIC_PLAYING.store(false, Ordering::Relaxed);
+                return false;
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let script = r#"
+tell application "System Events"
+    if (exists process "Spotify") then
+        tell application "Spotify" to if player state is playing then return "playing"
+    end if
+    if (exists process "Music") then
+        tell application "Music" to if player state is playing then return "playing"
+    end if
+end tell
+"#;
+        if let Ok(out) = Command::new("osascript").args(["-e", script]).output() {
+            let s = String::from_utf8_lossy(&out.stdout);
+            if s.trim() == "playing" {
+                LAST_KNOWN_MUSIC_PLAYING.store(true, Ordering::Relaxed);
+                return true;
+            } else {
+                LAST_KNOWN_MUSIC_PLAYING.store(false, Ordering::Relaxed);
+                return false;
+            }
+        }
+    }
+
+    LAST_KNOWN_MUSIC_PLAYING.load(Ordering::Relaxed)
+}
+
+#[tauri::command]
+async fn is_music_playing() -> Result<bool, String> {
+    Ok(check_is_music_playing())
 }
 
 const MAX_MEMORY_FACTS: usize = 25;
@@ -1843,6 +1968,317 @@ async fn manage_memory(action: String, fact: Option<String>) -> Result<String, S
     .map_err(|e| format!("Помилка керування пам'яттю: {}", e))?
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct ReminderItem {
+    pub id: String,
+    pub text: String,
+    pub target_time: String,
+    pub timestamp_epoch: i64,
+    #[serde(default)]
+    pub completed: bool,
+    #[serde(default)]
+    pub is_timer: bool,
+}
+
+pub fn get_reminders_file_path() -> Result<PathBuf, String> {
+    let config_path = get_user_config_path()?;
+    if let Some(parent) = config_path.parent() {
+        return Ok(parent.join("reminders.json"));
+    }
+    let home = get_home_dir()?;
+    Ok(home.join(".config").join("local-helper-ai").join("reminders.json"))
+}
+
+fn read_reminders_sync() -> Vec<ReminderItem> {
+    if let Ok(path) = get_reminders_file_path() {
+        if path.exists() {
+            if let Ok(raw) = fs::read_to_string(&path) {
+                if let Ok(items) = serde_json::from_str::<Vec<ReminderItem>>(&raw) {
+                    return items;
+                }
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn write_reminders_sync(items: &[ReminderItem]) -> Result<(), String> {
+    let path = get_reminders_file_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "Не вдалося створити директорію для нагадувань {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
+    }
+    let json = serde_json::to_string_pretty(items)
+        .map_err(|e| format!("Помилка серіалізації нагадувань: {}", e))?;
+    fs::write(&path, json).map_err(|e| {
+        format!(
+            "Не вдалося зберегти нагадування у {}: {}",
+            path.display(),
+            e
+        )
+    })
+}
+
+fn trigger_system_alert(title: &str, message: &str) {
+    #[cfg(target_os = "linux")]
+    {
+        // 1. Системне сповіщення (без зайвих прапорців -a/-i, які можуть конфліктувати у Wayland)
+        let _ = Command::new("notify-send")
+            .args(["-u", "critical", title, message])
+            .spawn();
+
+        // 2. Системний звук (PipeWire pw-play, canberra-gtk-play, aplay)
+        let sound_paths = [
+            "/usr/share/sounds/freedesktop/stereo/complete.oga",
+            "/usr/share/sounds/freedesktop/stereo/bell.oga",
+            "/usr/share/sounds/ubuntu/notifications/Blip.ogg",
+            "/usr/share/sounds/gnome/default/alerts/glass.ogg",
+        ];
+
+        let mut played = false;
+        for sp in &sound_paths {
+            if Path::new(sp).exists() {
+                if let Ok(child) = Command::new("pw-play").arg(sp).spawn() {
+                    played = true;
+                    let _ = child;
+                    break;
+                }
+            }
+        }
+
+        if !played {
+            let _ = Command::new("canberra-gtk-play")
+                .args(["-i", "bell"])
+                .spawn();
+        }
+
+        if !played {
+            for sp in &sound_paths {
+                if Path::new(sp).exists() {
+                    let _ = Command::new("aplay").arg(sp).spawn();
+                    break;
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = Command::new("powershell")
+            .args(["-Command", "[System.Media.SystemSounds]::Asterisk.Play();"])
+            .spawn();
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!("display notification \"{}\" with title \"{}\" sound name \"Glass\"", message, title);
+        let _ = Command::new("osascript").args(["-e", &script]).spawn();
+    }
+}
+
+fn parse_target_timestamp(target_time_str: &str) -> Result<i64, String> {
+    let mut trimmed = target_time_str.trim().replace(';', ":");
+    // Якщо передано час через пробіл (наприклад, "4 44" -> "4:44")
+    if let Some(pos) = trimmed.find(' ') {
+        let (first, second) = trimmed.split_at(pos);
+        let sec_trimmed = second.trim();
+        if !first.is_empty() && first.chars().all(|c| c.is_ascii_digit())
+            && !sec_trimmed.is_empty() && sec_trimmed.chars().all(|c| c.is_ascii_digit())
+        {
+            trimmed = format!("{}:{}", first, sec_trimmed);
+        }
+    }
+
+    if let Ok(dt) = DateTime::parse_from_rfc3339(&trimmed) {
+        return Ok(dt.timestamp());
+    }
+
+    let dt_formats = [
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d %H:%M",
+        "%d.%m.%Y %H:%M:%S",
+        "%d.%m.%Y %H:%M",
+    ];
+    for fmt in dt_formats {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(&trimmed, fmt) {
+            if let Some(local_dt) = Local.from_local_datetime(&naive).single() {
+                return Ok(local_dt.timestamp());
+            }
+        }
+    }
+
+    let time_formats = [
+        "%H:%M:%S",
+        "%H:%M",
+        "%k:%M:%S",
+        "%k:%M",
+        "%I:%M:%S %p",
+        "%I:%M %p",
+    ];
+    for fmt in time_formats {
+        if let Ok(time) = NaiveTime::parse_from_str(&trimmed, fmt) {
+            let today = Local::now().date_naive();
+            let now_epoch = Local::now().timestamp();
+            let naive_dt = today.and_time(time);
+            if let Some(local_dt) = Local.from_local_datetime(&naive_dt).single() {
+                let mut epoch = local_dt.timestamp();
+                if epoch <= now_epoch {
+                    let tomorrow = today + ChronoDuration::days(1);
+                    if let Some(tomorrow_dt) = Local.from_local_datetime(&tomorrow.and_time(time)).single() {
+                        epoch = tomorrow_dt.timestamp();
+                    }
+                }
+                return Ok(epoch);
+            }
+        }
+    }
+
+    Err(format!(
+        "Не вдалося розпізнати дату й час '{}'. Очікується формат YYYY-MM-DDTHH:MM:SS, YYYY-MM-DD HH:MM або час HH:MM",
+        trimmed
+    ))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn manage_reminders(
+    action: String,
+    text: Option<String>,
+    delay_seconds: Option<i64>,
+    target_time: Option<String>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut reminders = read_reminders_sync();
+        let now_dt = Local::now();
+        let now_epoch = now_dt.timestamp();
+        let act = action.trim().to_lowercase();
+
+        match act.as_str() {
+            "create" | "add" | "set" => {
+                let raw_text = text.unwrap_or_default();
+                let clean_text = raw_text.trim();
+                if clean_text.is_empty() {
+                    return Err("Потрібно вказати текст нагадування (про що нагадати).".to_string());
+                }
+
+                let (target_epoch, is_timer) = if let Some(secs) = delay_seconds {
+                    if secs <= 0 {
+                        return Err("Кількість секунд таймера має бути більшою за 0.".to_string());
+                    }
+                    (now_epoch + secs, true)
+                } else if let Some(ref t_str) = target_time {
+                    (parse_target_timestamp(t_str)?, false)
+                } else {
+                    return Err("Потрібно вказати delay_seconds (наприклад, 900 для 15 хв) або target_time (наприклад, 2026-10-22T10:00:00).".to_string());
+                };
+
+                if target_epoch <= now_epoch {
+                    return Err("Час нагадування вже минув! Вкажіть час у майбутньому.".to_string());
+                }
+
+                let target_dt_str = Local
+                    .timestamp_opt(target_epoch, 0)
+                    .single()
+                    .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                    .unwrap_or_else(|| target_epoch.to_string());
+
+                let id = format!("rem_{}", Local::now().timestamp_millis());
+                reminders.push(ReminderItem {
+                    id,
+                    text: clean_text.to_string(),
+                    target_time: target_dt_str.clone(),
+                    timestamp_epoch: target_epoch,
+                    completed: false,
+                    is_timer,
+                });
+
+                write_reminders_sync(&reminders)?;
+
+                let diff_secs = target_epoch - now_epoch;
+                let human_rel = if diff_secs < 60 {
+                    format!("через {} сек", diff_secs)
+                } else if diff_secs < 3600 {
+                    format!("через {} хв", diff_secs / 60)
+                } else if diff_secs < 86400 {
+                    format!("через {} год {} хв", diff_secs / 3600, (diff_secs % 3600) / 60)
+                } else {
+                    format!("через {} дн", diff_secs / 86400)
+                };
+
+                if is_timer {
+                    Ok(format!("Поставив таймер: '{}' на {} ({}) ⏰", clean_text, human_rel, target_dt_str))
+                } else {
+                    Ok(format!("Запланував нагадування: '{}' на {} ({}) ⏰", clean_text, target_dt_str, human_rel))
+                }
+            }
+            "list" | "show" => {
+                let mut active: Vec<_> = reminders
+                    .iter()
+                    .filter(|r| !r.completed && r.timestamp_epoch > now_epoch)
+                    .collect();
+
+                if active.is_empty() {
+                    return Ok("Немає активних нагадувань або таймерів.".to_string());
+                }
+
+                active.sort_by_key(|r| r.timestamp_epoch);
+
+                let mut lines = Vec::new();
+                for r in active {
+                    let diff_secs = r.timestamp_epoch - now_epoch;
+                    let human_rel = if diff_secs < 60 {
+                        format!("через {} сек", diff_secs)
+                    } else if diff_secs < 3600 {
+                        format!("через {} хв", diff_secs / 60)
+                    } else if diff_secs < 86400 {
+                        format!("через {} год {} хв", diff_secs / 3600, (diff_secs % 3600) / 60)
+                    } else {
+                        format!("через {} дн", diff_secs / 86400)
+                    };
+                    lines.push(format!("• '{}' — {} ({})", r.text, r.target_time, human_rel));
+                }
+                Ok(format!("Активні нагадування:\n{}", lines.join("\n")))
+            }
+            "cancel" | "delete" | "remove" => {
+                let raw_text = text.unwrap_or_default();
+                let clean_text = raw_text.trim().to_lowercase();
+                if clean_text.is_empty() || clean_text == "all" || clean_text == "все" || clean_text == "всі" {
+                    let count = reminders.iter().filter(|r| !r.completed).count();
+                    for r in &mut reminders {
+                        r.completed = true;
+                    }
+                    write_reminders_sync(&reminders)?;
+                    return Ok(format!("Скасовано всі активні нагадування ({}) ❌", count));
+                }
+
+                let mut cancelled_count = 0;
+                for r in &mut reminders {
+                    if !r.completed && (r.text.to_lowercase().contains(&clean_text) || r.id == clean_text) {
+                        r.completed = true;
+                        cancelled_count += 1;
+                    }
+                }
+                write_reminders_sync(&reminders)?;
+
+                if cancelled_count > 0 {
+                    Ok(format!("Скасовано нагадувань: {} ❌", cancelled_count))
+                } else {
+                    Ok(format!("Не знайдено активного нагадування за запитом '{}'.", raw_text))
+                }
+            }
+            _ => Err("Невідома дія для нагадувань. Доступні: create, list, cancel.".to_string()),
+        }
+    })
+    .await
+    .map_err(|e| format!("Помилка обробки нагадування: {}", e))?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1859,6 +2295,95 @@ pub fn run() {
                     }
                 });
             }
+
+            // Фоновий планувальник нагадувань і таймерів
+            let app_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                // Перевірка пропущених нагадувань при старті
+                {
+                    let mut reminders = read_reminders_sync();
+                    let now_epoch = Local::now().timestamp();
+                    let mut missed = Vec::new();
+                    for r in &mut reminders {
+                        if !r.completed && r.timestamp_epoch <= now_epoch {
+                            r.completed = true;
+                            missed.push(r.text.clone());
+                        }
+                    }
+                    if !missed.is_empty() {
+                        let _ = write_reminders_sync(&reminders);
+                        let missed_text = missed.join(", ");
+                        trigger_system_alert(
+                            "⚠️ Пропущене нагадування!",
+                            &format!("Поки маскот був вимкнений, минув час: {}", missed_text),
+                        );
+                        if let Some(window) = app_handle.get_webview_window("main") {
+                            let _ = window.unminimize();
+                            let _ = window.show();
+                            let _ = window.set_always_on_top(true);
+                            let _ = window.set_focus();
+                        }
+                        let _ = app_handle.emit(
+                            "reminder-alert",
+                            serde_json::json!({
+                                "text": format!("Поки я був вимкнений, минув час: {}", missed_text),
+                                "missed": true
+                            }),
+                        );
+                    }
+                }
+
+                // Головний цикл відліку часу та моніторингу фонової музики
+                let mut tick: u64 = 0;
+                let mut last_emitted_playing = false;
+
+                loop {
+                    std::thread::sleep(Duration::from_secs(1));
+                    tick += 1;
+
+                    // Кожні 2 секунди перевіряємо статус відтворення музики у браузері / системі
+                    if tick % 2 == 0 {
+                        let is_playing = check_is_music_playing();
+                        if is_playing != last_emitted_playing {
+                            last_emitted_playing = is_playing;
+                            let _ = app_handle.emit("media-playback-changed", is_playing);
+                        }
+                    }
+
+                    let now_epoch = Local::now().timestamp();
+                    let mut reminders = read_reminders_sync();
+                    let mut changed = false;
+
+                    for r in &mut reminders {
+                        if !r.completed && r.timestamp_epoch <= now_epoch {
+                            r.completed = true;
+                            changed = true;
+
+                            trigger_system_alert("🔔 Нагадування!", &r.text);
+
+                            if let Some(window) = app_handle.get_webview_window("main") {
+                                let _ = window.unminimize();
+                                let _ = window.show();
+                                let _ = window.set_always_on_top(true);
+                                let _ = window.set_focus();
+                            }
+
+                            let _ = app_handle.emit(
+                                "reminder-alert",
+                                serde_json::json!({
+                                    "text": r.text,
+                                    "id": r.id,
+                                    "target_time": r.target_time
+                                }),
+                            );
+                        }
+                    }
+
+                    if changed {
+                        let _ = write_reminders_sync(&reminders);
+                    }
+                }
+            });
 
             // Додаємо іконку в системний трей для зручного керування та виходу
             let toggle_item =
@@ -1908,9 +2433,27 @@ pub fn run() {
             control_media,
             get_agent_memory,
             append_conversation_turn,
-            manage_memory
+            manage_memory,
+            manage_reminders,
+            is_music_playing
         ])
         .run(tauri::generate_context!())
         .expect("Помилка запуску Tauri-застосунку");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_target_timestamp_various_formats() {
+        assert!(parse_target_timestamp("2026-10-25T10:00:00").is_ok());
+        assert!(parse_target_timestamp("2026-10-25 10:00").is_ok());
+        assert!(parse_target_timestamp("10:00").is_ok());
+        assert!(parse_target_timestamp("4:44").is_ok());
+        assert!(parse_target_timestamp("4 44").is_ok());
+        assert!(parse_target_timestamp("4;40").is_ok());
+        assert!(parse_target_timestamp("04:44:00").is_ok());
+    }
 }
 

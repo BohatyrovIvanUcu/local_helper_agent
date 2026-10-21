@@ -14,7 +14,8 @@ export type WorkingToolName =
   | "read_file_or_dir"
   | "run_cli_command"
   | "control_media"
-  | "manage_memory";
+  | "manage_memory"
+  | "manage_reminders";
 
 export interface MemoryMessage {
   role: string;
@@ -58,7 +59,13 @@ export async function getAgentMemory(): Promise<AgentMemory> {
 
 function getSystemInstruction(memoryFacts: string[] = []): string {
   const now = new Date();
-  const isoDate = now.toISOString().slice(0, 10);
+  const isoDate = now.toLocaleDateString("en-CA");
+  const currentTime = now.toLocaleTimeString("uk-UA", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
   const weekday = now.toLocaleDateString("uk-UA", { weekday: "long" });
 
   const factsSection =
@@ -72,7 +79,7 @@ function getSystemInstruction(memoryFacts: string[] = []): string {
 Твій стиль: дружній, лаконічний, конкретний тон майстра-помічника без зайвої води (1–3 короткі речення).
 Мова спілкування: українська.
 
-Поточний час та дата: ${isoDate} (сьогодні: ${weekday}).
+Поточний точний час та дата: ${isoDate} ${currentTime} (сьогодні: ${weekday}).
 Головний файл для користувача: 'TODO.md' в Obsidian (дошка Kanban).
 ${factsSection}
 Колонки у файлі TODO.md:
@@ -101,6 +108,19 @@ ${factsSection}
 4. run_cli_command — виконуй термінальні команди, коли потрібно перевірити статус git, список процесів або запустити скрипт.
 5. control_media — керуй відтворенням музики (play, pause, next, prev, liked_music, my_mix).
 6. manage_memory — зберігай або видаляй важливі факти у своїй довгостроковій пам'яті між перезапусками.
+7. manage_reminders — встановлюй таймери та плануй нагадування на певний час, показуй список або скасовуй їх.
+
+Нагадування та таймери (manage_reminders):
+Коли користувач каже: "нагадай через 10 хвилин...", "постав таймер на 15 хв...", "нагадай завтра о 10:00 про...", "які в мене нагадування?", "скасуй нагадування...":
+- ЗАВЖДИ викликай інструмент 'manage_reminders'!
+- Якщо вказано відносний час ("через 15 хвилин", "через годину", "таймер на 5 хвилин"):
+  обчисли кількість секунд у delay_seconds (наприклад, 5 хв = 300, 15 хв = 900, 1 год = 3600) і виклич manage_reminders(action: "create", text: "про що нагадати", delay_seconds: кількість_секунд).
+- Якщо вказано точний час або день ("завтра о 10:00", "сьогодні о 19:30", "в п'ятницю о 14:00"):
+  точно обчисли дату й час відносно поточної дати (${isoDate}, ${weekday}) у форматі YYYY-MM-DDTHH:MM:SS і виклич manage_reminders(action: "create", text: "про що нагадати", target_time: "YYYY-MM-DDTHH:MM:SS").
+- Якщо користувач питає "які в мене є нагадування?", "покажи таймери":
+  виклич manage_reminders(action: "list").
+- Якщо користувач просить скасувати нагадування ("скасуй нагадування про чайник"):
+  виклич manage_reminders(action: "cancel", text: "ключове слово або all").
 
 Робота з пам'яттю (manage_memory):
 - Якщо користувач ділиться важливим фактом про себе, свої проєкти, шляхи до робочих папок, університет, улюблені сервіси/браузер або прямо каже "запам'ятай..." — виклич manage_memory(action: "remember", fact: "короткий факт 1 реченням").
@@ -259,7 +279,63 @@ export const toolDeclarations: FunctionDeclaration[] = [
       required: ["action"],
     },
   },
+  {
+    name: "manage_reminders",
+    description:
+      "Встановлює, показує або скасовує нагадування та таймери. Працює локально та зберігається між перезапусками.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        action: {
+          type: Type.STRING,
+          description:
+            "Дія: 'create' (створити нове нагадування/таймер), 'list' (показати активні), 'cancel' (скасувати).",
+        },
+        text: {
+          type: Type.STRING,
+          description:
+            "Текст нагадування (про що саме нагадати) або ключове слово для скасування.",
+        },
+        delay_seconds: {
+          type: Type.INTEGER,
+          description:
+            "Для відносних таймерів: кількість секунд від поточного моменту (наприклад: 300 для 5 хв, 900 для 15 хв, 3600 для 1 год).",
+        },
+        target_time: {
+          type: Type.STRING,
+          description:
+            "Для точного часу: дата й час у форматі ISO 8601 YYYY-MM-DDTHH:MM:SS (наприклад, 2026-10-22T10:00:00).",
+        },
+      },
+      required: ["action"],
+    },
+  },
 ];
+
+async function executeLocalRustToolWithTimeout(
+  name: string,
+  args: Record<string, unknown>,
+  timeoutMs = 10000
+): Promise<{ ok: boolean; output: string }> {
+  let timer: number | undefined;
+  const timeoutPromise = new Promise<{ ok: boolean; output: string }>((resolve) => {
+    timer = window.setTimeout(() => {
+      resolve({
+        ok: false,
+        output: `Час очікування інструменту ${name} вичерпано (${timeoutMs / 1000} с).`,
+      });
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([
+      executeLocalRustTool(name, args),
+      timeoutPromise,
+    ]);
+  } finally {
+    if (timer) window.clearTimeout(timer);
+  }
+}
 
 async function executeLocalRustTool(
   name: string,
@@ -267,6 +343,28 @@ async function executeLocalRustTool(
 ): Promise<{ ok: boolean; output: string }> {
   try {
     switch (name) {
+      case "manage_reminders": {
+        const rawDelay = args.delay_seconds ?? args.delaySeconds ?? args.seconds;
+        const rawTargetTime = args.target_time ?? args.targetTime ?? args.time;
+        const delaySeconds =
+          typeof rawDelay === "number"
+            ? Math.round(rawDelay)
+            : typeof rawDelay === "string" && !isNaN(Number(rawDelay))
+            ? Math.round(Number(rawDelay))
+            : null;
+        const targetTime =
+          typeof rawTargetTime === "string" ? rawTargetTime.trim() : null;
+
+        const res = await invoke<string>("manage_reminders", {
+          action: String(args.action || "create"),
+          text: typeof args.text === "string" ? args.text.trim() : null,
+          delay_seconds: delaySeconds,
+          target_time: targetTime,
+          delaySeconds: delaySeconds,
+          targetTime: targetTime,
+        });
+        return { ok: true, output: res };
+      }
       case "manage_memory": {
         const res = await invoke<string>("manage_memory", {
           action: String(args.action || "remember"),
@@ -498,7 +596,7 @@ export async function askMascot(
       callbacks.onStateChange("WORKING", toolName);
 
       const args = (call.args as Record<string, unknown>) ?? {};
-      const result = await executeLocalRustTool(toolName, args);
+      const result = await executeLocalRustToolWithTimeout(toolName, args);
 
       executedToolsLog.push(toolName);
       if (toolName === "manage_memory") {

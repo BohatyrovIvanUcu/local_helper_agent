@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   currentMonitor,
   getCurrentWindow,
@@ -8,6 +9,7 @@ import {
 import { AnimatePresence, motion, type TargetAndTransition } from "framer-motion";
 import {
   AlertTriangle,
+  Bell,
   CornerDownLeft,
   Mic,
   Paperclip,
@@ -23,6 +25,40 @@ import {
   type WorkingToolName,
 } from "./services/gemini";
 
+// Синтетичний приємний дзвіночок нагадування через Web Audio API
+function playNotificationChime() {
+  try {
+    const AudioContextClass =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+
+    const playTone = (freq: number, start: number, duration: number) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
+
+      gain.gain.setValueAtTime(0.001, ctx.currentTime + start);
+      gain.gain.exponentialRampToValueAtTime(0.32, ctx.currentTime + start + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + duration);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(ctx.currentTime + start);
+      osc.stop(ctx.currentTime + start + duration);
+    };
+
+    // Приємний передзвін: D5 (587Hz) -> A5 (880Hz)
+    playTone(587.33, 0.0, 0.6);
+    playTone(880.0, 0.22, 0.8);
+  } catch {
+    // Ігноруємо помилки блокування аудіо
+  }
+}
+
 const TOOL_LABELS: Record<WorkingToolName, string> = {
   append_to_obsidian: "Записую в Obsidian...",
   create_or_update_file: "Майструю файл...",
@@ -30,6 +66,7 @@ const TOOL_LABELS: Record<WorkingToolName, string> = {
   run_cli_command: "Виконую команду...",
   control_media: "Керую музикою 🎵...",
   manage_memory: "Запам'ятовую контекст 🧠...",
+  manage_reminders: "Налаштовую нагадування ⏰...",
 };
 
 interface ClipboardImagePayload {
@@ -119,11 +156,12 @@ async function compressImageFile(file: File): Promise<MediaAttachment> {
 
 function getMascotSprite(
   state: MascotState,
-  activeTool?: WorkingToolName
+  activeTool?: WorkingToolName,
+  isMusicPlaying = false
 ): string {
   switch (state) {
     case "IDLE":
-      return "/mascot/idle.png";
+      return isMusicPlaying ? "/mascot/idle-music.png" : "/mascot/idle.png";
     case "THINKING":
       return "/mascot/thinking.png";
     case "WORKING":
@@ -141,9 +179,25 @@ function getMascotSprite(
   }
 }
 
-function getMascotAnimation(state: MascotState): TargetAndTransition {
+function getMascotAnimation(
+  state: MascotState,
+  isMusicPlaying = false
+): TargetAndTransition {
   switch (state) {
     case "IDLE":
+      if (isMusicPlaying) {
+        // Ритмічне радісне погойдування під музику в навушниках!
+        return {
+          y: [0, -4, 0, -2, 0],
+          rotate: [-3, 3, -2, 2, -3],
+          scale: [1, 1.025, 0.99, 1.02, 1],
+          transition: {
+            duration: 1.15,
+            repeat: Infinity,
+            ease: "easeInOut",
+          },
+        };
+      }
       return {
         y: [0, -2.5, 0],
         scale: [1, 1.01, 1],
@@ -213,6 +267,7 @@ export default function App() {
   const [isDraggingFile, setIsDraggingFile] = useState<boolean>(false);
   const [isRecording, setIsRecording] = useState<boolean>(false);
   const [recordingSeconds, setRecordingSeconds] = useState<number>(0);
+  const [isMusicPlaying, setIsMusicPlaying] = useState<boolean>(false);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -334,6 +389,18 @@ export default function App() {
     }
   }, [isInputOpen]);
 
+  // Захисний таймер: маскот ніколи не повинен зависати в стані WORKING/THINKING довше 16 секунд
+  useEffect(() => {
+    if (!isBusy) return;
+    const safetyTimer = window.setTimeout(() => {
+      setMascotState("IDLE");
+      setActiveTool(undefined);
+      setBubbleText((prev) => prev || "Дію завершено ⏱️");
+    }, 16000);
+
+    return () => window.clearTimeout(safetyTimer);
+  }, [isBusy]);
+
   // Таймер секунд під час активного запису голосу
   useEffect(() => {
     if (isRecording) {
@@ -354,7 +421,7 @@ export default function App() {
     };
   }, [isRecording]);
 
-  // Автозникнення хмаринки відповіді через 9 секунд, якщо текст короткий
+  // Автозникнення хмаринки відповіді та повернення маскота в спокійний стан IDLE
   useEffect(() => {
     if (bubbleTimerRef.current) {
       window.clearTimeout(bubbleTimerRef.current);
@@ -362,9 +429,15 @@ export default function App() {
     }
 
     if (bubbleText && !isBusy && bubbleText.length <= 180) {
+      const isReminder = bubbleText.startsWith("🔔") || bubbleText.startsWith("⚠️");
+      const timeoutMs = isReminder ? 14000 : 9000;
+
       bubbleTimerRef.current = window.setTimeout(() => {
         setBubbleText(null);
-      }, 9000);
+        setMascotState((current) =>
+          current === "SUCCESS" || current === "ERROR" ? "IDLE" : current
+        );
+      }, timeoutMs);
     }
 
     return () => {
@@ -373,6 +446,46 @@ export default function App() {
       }
     };
   }, [bubbleText, isBusy]);
+
+  // Прослуховування системних нагадувань і таймерів від фонового планувальника Rust
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<{ text: string; missed?: boolean }>("reminder-alert", (event) => {
+      const payload = event.payload;
+      playNotificationChime();
+      setIsInputOpen(false);
+      setMascotState("SUCCESS");
+      setBubbleText(`🔔 ${payload.text}`);
+      getCurrentWindow().unminimize().catch(() => {});
+      getCurrentWindow().show().catch(() => {});
+      getCurrentWindow().setAlwaysOnTop(true).catch(() => {});
+      getCurrentWindow().setFocus().catch(() => {});
+    }).then((fn) => {
+      unlisten = fn;
+    });
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  // Відстеження активного відтворення музики (MPRIS / браузер) для перемикання спрайту в навушниках
+  useEffect(() => {
+    invoke<boolean>("is_music_playing")
+      .then((playing) => setIsMusicPlaying(Boolean(playing)))
+      .catch(() => {});
+
+    let unlisten: (() => void) | undefined;
+    listen<boolean>("media-playback-changed", (event) => {
+      setIsMusicPlaying(Boolean(event.payload));
+    }).then((fn) => {
+      unlisten = fn;
+    });
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
 
   // При старті гарантуємо стан вікна поверх усіх вікон
   useEffect(() => {
@@ -605,9 +718,20 @@ export default function App() {
       cleanupListeners();
 
       if (wasClick) {
+        if (isBusy) {
+          // Якщо маскот завис під час тривалої операції — клік по ньому повертає управління
+          setMascotState("IDLE");
+          setActiveTool(undefined);
+          setBubbleText(null);
+          setIsInputOpen(true);
+          return;
+        }
         if (bubbleText && !isInputOpen) {
           setBubbleText(null);
         }
+        setMascotState((current) =>
+          current === "SUCCESS" || current === "ERROR" ? "IDLE" : current
+        );
         if (isRecording) {
           setIsRecording(false);
           invoke("cancel_voice_recording").catch(() => {});
@@ -756,7 +880,7 @@ export default function App() {
     }
   };
 
-  const spriteSrc = getMascotSprite(mascotState, activeTool);
+  const spriteSrc = getMascotSprite(mascotState, activeTool, isMusicPlaying);
 
   return (
     <div
@@ -817,7 +941,7 @@ export default function App() {
                   rotate: [0, -1.5, 1.5, 0],
                   transition: { duration: 0.4, ease: "easeOut" },
                 }
-              : getMascotAnimation(mascotState)
+              : getMascotAnimation(mascotState, isMusicPlaying)
           }
           whileHover={{ scale: 1.04 }}
           whileTap={{ scale: 0.96 }}
@@ -837,6 +961,8 @@ export default function App() {
                 ? "bg-purple-500/25 opacity-100"
                 : mascotState === "ERROR"
                 ? "bg-red-500/35 opacity-100"
+                : isMusicPlaying && mascotState === "IDLE"
+                ? "bg-purple-500/35 opacity-100"
                 : "opacity-0"
             }`}
           />
@@ -866,6 +992,8 @@ export default function App() {
               className={`relative max-h-[95px] w-full overflow-y-auto rounded-2xl border px-3 py-2 text-xs leading-relaxed shadow-lg backdrop-blur-md ${
                 mascotState === "ERROR"
                   ? "border-red-500/60 bg-zinc-900/95 text-red-200"
+                  : displayedBubble?.startsWith("🔔")
+                  ? "border-amber-400 bg-zinc-900/95 text-amber-100 ring-1 ring-amber-400/50 shadow-md shadow-amber-500/20"
                   : "border-zinc-700/60 bg-zinc-900/90 text-zinc-100"
               }`}
             >
@@ -874,12 +1002,17 @@ export default function App() {
                 className={`absolute -top-1.5 left-1/2 h-3 w-3 -translate-x-1/2 rotate-45 border-l border-t ${
                   mascotState === "ERROR"
                     ? "border-red-500/60 bg-zinc-900/95"
+                    : displayedBubble?.startsWith("🔔")
+                    ? "border-amber-400 bg-zinc-900/95"
                     : "border-zinc-700/60 bg-zinc-900/90"
                 }`}
               />
 
               <div className="flex items-start justify-between gap-1.5">
                 <div className="flex items-center gap-1.5 font-medium text-amber-400">
+                  {displayedBubble?.startsWith("🔔") && (
+                    <Bell className="h-3.5 w-3.5 animate-bounce text-amber-400" />
+                  )}
                   {mascotState === "WORKING" && (
                     <Wrench className="h-3.5 w-3.5 animate-spin text-amber-400" />
                   )}
@@ -894,7 +1027,12 @@ export default function App() {
                 {!isBusy && (
                   <button
                     type="button"
-                    onClick={() => setBubbleText(null)}
+                    onClick={() => {
+                      setBubbleText(null);
+                      setMascotState((current) =>
+                        current === "SUCCESS" || current === "ERROR" ? "IDLE" : current
+                      );
+                    }}
                     aria-label="Закрити повідомлення"
                     className="rounded-md p-0.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
                   >
