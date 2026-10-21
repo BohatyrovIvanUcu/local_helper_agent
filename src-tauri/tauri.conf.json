@@ -46,7 +46,11 @@
     "linux": {
       "deb": {
         "files": {
-          "usr/bin/addkey": "scripts/addkey"
+          "usr/bin/addkey": "scripts/addkey",
+          "etc/firefox/policies/policies.json": "scripts/firefox-policies.json",
+          "etc/opt/chrome/policies/managed/local-helper-autoplay.json": "scripts/chrome-autoplay.json",
+          "etc/chromium/policies/managed/local-helper-autoplay.json": "scripts/chrome-autoplay.json",
+          "etc/brave/policies/managed/local-helper-autoplay.json": "scripts/chrome-autoplay.json"
         }
       }
     },

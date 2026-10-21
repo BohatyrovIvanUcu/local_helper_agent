@@ -1130,6 +1130,719 @@ async fn read_clipboard_image(
     }
 }
 
+fn resume_media_player() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let py_code = r#"
+import sys, time, dbus
+try:
+    bus = dbus.SessionBus()
+    players = [s for s in bus.list_names() if s.startswith('org.mpris.MediaPlayer2.')]
+    if not players:
+        sys.exit(1)
+    resumed = False
+    for p in players:
+        try:
+            player_obj = bus.get_object(p, '/org/mpris/MediaPlayer2')
+            iface = dbus.Interface(player_obj, 'org.mpris.MediaPlayer2.Player')
+            props = dbus.Interface(player_obj, 'org.freedesktop.DBus.Properties')
+            try:
+                status = str(props.Get('org.mpris.MediaPlayer2.Player', 'PlaybackStatus'))
+                if status == 'Playing':
+                    resumed = True
+                    continue
+            except Exception:
+                pass
+            try:
+                iface.Play()
+            except Exception:
+                try:
+                    iface.PlayPause()
+                except Exception:
+                    pass
+            time.sleep(0.25)
+            try:
+                status_after = str(props.Get('org.mpris.MediaPlayer2.Player', 'PlaybackStatus'))
+                if status_after == 'Playing':
+                    resumed = True
+            except Exception:
+                pass
+        except Exception:
+            pass
+    sys.exit(0 if resumed else 1)
+except Exception:
+    sys.exit(1)
+"#;
+        if let Ok(status) = Command::new("python3").args(["-c", py_code]).status() {
+            if status.success() {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = Command::new("powershell")
+            .args(["-Command", "$w = New-Object -ComObject WScript.Shell; $w.SendKeys([char]179)"])
+            .status();
+        return true;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("osascript")
+            .args(["-e", "tell application \"Spotify\" to play"])
+            .status();
+        let _ = Command::new("osascript")
+            .args(["-e", "tell application \"Music\" to play"])
+            .status();
+        return true;
+    }
+
+    #[allow(unreachable_code)]
+    false
+}
+
+/// Якщо нова вкладка YouTube Music відкрилась зі спливаючим блокуванням "Почати відтворення",
+/// MPRIS-сесія ще не активна до першого кліку/натискання клавіші у вкладці.
+/// Ця функція перевіряє через D-Bus, чи плеєр ще не грає, і надсилає апаратне натискання Space
+/// через ядерний інтерфейс /dev/uinput (працює у Wayland для Firefox та Chrome) або XTest.
+fn kickstart_browser_playback() -> bool {
+    if resume_media_player() {
+        return true;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let py_kick = r#"
+import sys, os, time, fcntl, struct, subprocess, ctypes, ctypes.util
+
+def is_mpris_playing():
+    try:
+        import dbus
+        bus = dbus.SessionBus()
+        for p in bus.list_names():
+            if p.startswith('org.mpris.MediaPlayer2.'):
+                try:
+                    obj = bus.get_object(p, '/org/mpris/MediaPlayer2')
+                    props = dbus.Interface(obj, 'org.freedesktop.DBus.Properties')
+                    if str(props.Get('org.mpris.MediaPlayer2.Player', 'PlaybackStatus')) == 'Playing':
+                        return True
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return False
+
+if is_mpris_playing():
+    sys.exit(0)
+
+# 1. Нативний Wayland / X11 метод через /dev/uinput (працює для Mozilla Firefox та Chrome у Wayland)
+try:
+    fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK)
+    UI_SET_EVBIT = 0x40045564
+    UI_SET_KEYBIT = 0x40045565
+    UI_DEV_CREATE = 0x5501
+    UI_DEV_DESTROY = 0x5502
+    EV_SYN = 0x00
+    EV_KEY = 0x01
+    KEY_SPACE = 57
+
+    fcntl.ioctl(fd, UI_SET_EVBIT, EV_KEY)
+    fcntl.ioctl(fd, UI_SET_EVBIT, EV_SYN)
+    fcntl.ioctl(fd, UI_SET_KEYBIT, KEY_SPACE)
+
+    udev = struct.pack("80sHHHHI", b"local-helper-media-kbd", 0x03, 0x1234, 0x5678, 1, 0) + b"\x00" * (64 * 4 * 4)
+    os.write(fd, udev)
+    fcntl.ioctl(fd, UI_DEV_CREATE)
+    time.sleep(0.3)
+
+    if not is_mpris_playing():
+        os.write(fd, struct.pack("llHHi", 0, 0, EV_KEY, KEY_SPACE, 1))
+        os.write(fd, struct.pack("llHHi", 0, 0, EV_SYN, 0, 0))
+        time.sleep(0.05)
+        os.write(fd, struct.pack("llHHi", 0, 0, EV_KEY, KEY_SPACE, 0))
+        os.write(fd, struct.pack("llHHi", 0, 0, EV_SYN, 0, 0))
+        time.sleep(0.1)
+
+    fcntl.ioctl(fd, UI_DEV_DESTROY)
+    os.close(fd)
+    time.sleep(0.6)
+    if is_mpris_playing():
+        sys.exit(0)
+    sys.exit(1)
+except Exception:
+    pass
+
+# 2. Фолбек через X11 XTest (якщо /dev/uinput недоступний)
+try:
+    active_out = subprocess.check_output(["xprop", "-root", "_NET_ACTIVE_WINDOW"], timeout=2).decode("utf-8", errors="ignore")
+    parts = active_out.strip().split()
+    win_id = parts[-1] if parts else ""
+    if not win_id.startswith("0x") or win_id == "0x0":
+        sys.exit(1)
+    win_info = subprocess.check_output(["xprop", "-id", win_id, "_NET_WM_NAME", "WM_NAME", "WM_CLASS"], timeout=2).decode("utf-8", errors="ignore").lower()
+    if not any(k in win_info for k in ("youtube music", "chrome", "chromium", "brave", "opera", "firefox")):
+        sys.exit(1)
+
+    x11_path = ctypes.util.find_library("X11")
+    xtst_path = ctypes.util.find_library("Xtst")
+    if not x11_path or not xtst_path:
+        sys.exit(1)
+
+    x11 = ctypes.cdll.LoadLibrary(x11_path)
+    xtst = ctypes.cdll.LoadLibrary(xtst_path)
+
+    x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x11.XOpenDisplay.restype = ctypes.c_void_p
+    x11.XKeysymToKeycode.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    x11.XKeysymToKeycode.restype = ctypes.c_ubyte
+    xtst.XTestFakeKeyEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
+    xtst.XTestFakeKeyEvent.restype = ctypes.c_int
+    x11.XFlush.argtypes = [ctypes.c_void_p]
+    x11.XFlush.restype = ctypes.c_int
+    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    x11.XCloseDisplay.restype = ctypes.c_int
+
+    dpy = x11.XOpenDisplay(None)
+    if not dpy:
+        sys.exit(1)
+
+    keycode = x11.XKeysymToKeycode(dpy, 0x0020)
+    if keycode != 0:
+        xtst.XTestFakeKeyEvent(dpy, keycode, 1, 0)
+        x11.XFlush(dpy)
+        time.sleep(0.05)
+        xtst.XTestFakeKeyEvent(dpy, keycode, 0, 0)
+        x11.XFlush(dpy)
+
+    x11.XCloseDisplay(dpy)
+    time.sleep(0.35)
+    sys.exit(0)
+except Exception:
+    sys.exit(1)
+"#;
+        if let Ok(status) = Command::new("python3").args(["-c", py_kick]).status() {
+            if status.success() {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn pause_media_player() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(status) = Command::new("playerctl").arg("pause").status() {
+            if status.success() {
+                return true;
+            }
+        }
+
+        let py_code = r#"
+import sys, dbus
+try:
+    bus = dbus.SessionBus()
+    players = [s for s in bus.list_names() if s.startswith('org.mpris.MediaPlayer2.')]
+    if not players:
+        sys.exit(1)
+    paused = False
+    for p in players:
+        try:
+            player_obj = bus.get_object(p, '/org/mpris/MediaPlayer2')
+            iface = dbus.Interface(player_obj, 'org.mpris.MediaPlayer2.Player')
+            try:
+                iface.Pause()
+                paused = True
+            except Exception:
+                try:
+                    iface.PlayPause()
+                    paused = True
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    sys.exit(0 if paused else 1)
+except Exception:
+    sys.exit(1)
+"#;
+        if let Ok(status) = Command::new("python3").args(["-c", py_code]).status() {
+            if status.success() {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = Command::new("powershell")
+            .args(["-Command", "$w = New-Object -ComObject WScript.Shell; $w.SendKeys([char]179)"])
+            .status();
+        return true;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("osascript")
+            .args(["-e", "tell application \"Spotify\" to pause"])
+            .status();
+        let _ = Command::new("osascript")
+            .args(["-e", "tell application \"Music\" to pause"])
+            .status();
+        return true;
+    }
+
+    #[allow(unreachable_code)]
+    false
+}
+
+fn next_media_player() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(status) = Command::new("playerctl").arg("next").status() {
+            if status.success() {
+                return true;
+            }
+        }
+
+        let py_code = r#"
+import sys, dbus
+try:
+    bus = dbus.SessionBus()
+    players = [s for s in bus.list_names() if s.startswith('org.mpris.MediaPlayer2.')]
+    if not players:
+        sys.exit(1)
+    for p in players:
+        try:
+            bus.get_object(p, '/org/mpris/MediaPlayer2').Next(dbus_interface='org.mpris.MediaPlayer2.Player')
+        except Exception:
+            pass
+    sys.exit(0)
+except Exception:
+    sys.exit(1)
+"#;
+        if let Ok(status) = Command::new("python3").args(["-c", py_code]).status() {
+            if status.success() {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = Command::new("powershell")
+            .args(["-Command", "$w = New-Object -ComObject WScript.Shell; $w.SendKeys([char]176)"])
+            .status();
+        return true;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("osascript")
+            .args(["-e", "tell application \"Spotify\" to next track"])
+            .status();
+        let _ = Command::new("osascript")
+            .args(["-e", "tell application \"Music\" to next track"])
+            .status();
+        return true;
+    }
+
+    #[allow(unreachable_code)]
+    false
+}
+
+fn prev_media_player() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(status) = Command::new("playerctl").arg("previous").status() {
+            if status.success() {
+                return true;
+            }
+        }
+
+        let py_code = r#"
+import sys, dbus
+try:
+    bus = dbus.SessionBus()
+    players = [s for s in bus.list_names() if s.startswith('org.mpris.MediaPlayer2.')]
+    if not players:
+        sys.exit(1)
+    for p in players:
+        try:
+            bus.get_object(p, '/org/mpris/MediaPlayer2').Previous(dbus_interface='org.mpris.MediaPlayer2.Player')
+        except Exception:
+            pass
+    sys.exit(0)
+except Exception:
+    sys.exit(1)
+"#;
+        if let Ok(status) = Command::new("python3").args(["-c", py_code]).status() {
+            if status.success() {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = Command::new("powershell")
+            .args(["-Command", "$w = New-Object -ComObject WScript.Shell; $w.SendKeys([char]177)"])
+            .status();
+        return true;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("osascript")
+            .args(["-e", "tell application \"Spotify\" to previous track"])
+            .status();
+        let _ = Command::new("osascript")
+            .args(["-e", "tell application \"Music\" to previous track"])
+            .status();
+        return true;
+    }
+
+    #[allow(unreachable_code)]
+    false
+}
+
+fn open_and_play_query(query: &str) -> Result<String, String> {
+    let py_search = r#"
+import sys, urllib.request, urllib.parse, re, subprocess
+
+raw = sys.argv[1].strip() if len(sys.argv) > 1 else ""
+play_url = None
+
+# 1. Пряме посилання на плейлист або трек (наприклад, https://music.youtube.com/playlist?list=LM)
+if raw.startswith("http://") or raw.startswith("https://"):
+    url = raw
+    if "playlist?list=" in url:
+        url = url.replace("playlist?list=", "watch?list=")
+    if "watch?list=" in url and "&index=" not in url and "&v=" not in url:
+        url += "&index=1"
+    play_url = url
+elif raw.lower() in ("liked", "liked_music", "лайки", "улюблені", "улюблена музика", "мій плейлист", "моя музика", "мої лайки", "музика яка сподобалась"):
+    play_url = "https://music.youtube.com/watch?list=LM&index=1"
+elif raw.lower() in ("my_mix", "mix", "рекомендації", "мікс", "мої рекомендації", "супермікс"):
+    play_url = "https://music.youtube.com/watch?list=RDMM"
+elif raw:
+    try:
+        q = urllib.parse.quote_plus(raw)
+        url = f"https://www.youtube.com/results?search_query={q}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"})
+        html = urllib.request.urlopen(req, timeout=4).read().decode('utf-8', errors='ignore')
+        matches = re.findall(r"watch\?v=([a-zA-Z0-9_-]{11})", html)
+        if matches:
+            vid = matches[0]
+            play_url = f"https://music.youtube.com/watch?v={vid}"
+    except Exception:
+        pass
+    if not play_url:
+        play_url = f"https://music.youtube.com/search?q={urllib.parse.quote_plus(raw)}"
+
+# За замовчуванням відкриваємо персональний плейлист вподобань користувача (Liked Music) з першого треку!
+if not play_url:
+    play_url = "https://music.youtube.com/watch?list=LM&index=1"
+
+if sys.platform == "win32":
+    subprocess.Popen(["cmd", "/C", "start", play_url])
+elif sys.platform == "darwin":
+    subprocess.Popen(["open", play_url])
+else:
+    subprocess.Popen(["xdg-open", play_url])
+
+print("OK:" + play_url)
+"#;
+
+    let res = Command::new("python3")
+        .args(["-c", py_search, query])
+        .output();
+
+    // Запускаємо фонову перевірку: чекаємо повного завантаження вкладки та редіректу YouTube Music у Firefox/Chrome,
+    // перевіряємо MPRIS або надсилаємо натискання Space через /dev/uinput для обходу "Почати відтворення"
+    std::thread::spawn(|| {
+        std::thread::sleep(Duration::from_millis(2200));
+        if resume_media_player() {
+            return;
+        }
+        for delay_ms in [2000, 2500] {
+            std::thread::sleep(Duration::from_millis(delay_ms));
+            if kickstart_browser_playback() {
+                break;
+            }
+        }
+    });
+
+    if let Ok(out) = res {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        if stdout.contains("OK:") {
+            if query.is_empty() || query == "liked_music" || query.to_lowercase().contains("лайк") {
+                return Ok("Вмикаю твій плейлист 'Музика, яка сподобалась' у YouTube Music 🎵".to_string());
+            } else if query == "my_mix" || query.to_lowercase().contains("рекомендац") {
+                return Ok("Вмикаю твій персональний мікс рекомендацій у YouTube Music 🎵".to_string());
+            } else {
+                return Ok(format!("Увімкнено відтворення музики ('{}') 🎵", query));
+            }
+        }
+    }
+
+    let direct_url = if query.is_empty() || query == "liked_music" {
+        "https://music.youtube.com/watch?list=LM&index=1".to_string()
+    } else {
+        format!("https://music.youtube.com/search?q={}", query)
+    };
+
+    #[cfg(target_os = "windows")]
+    let _ = Command::new("cmd").args(["/C", "start", &direct_url]).spawn();
+    #[cfg(target_os = "macos")]
+    let _ = Command::new("open").arg(&direct_url).spawn();
+    #[cfg(target_os = "linux")]
+    let _ = Command::new("xdg-open").arg(&direct_url).spawn();
+
+    Ok("Відкриваю YouTube Music 🎵".to_string())
+}
+
+/// Керує відтворенням медіа: натискає Play/Pause на активному плеєрі або запускає прямий трек.
+#[tauri::command]
+async fn control_media(action: String, query: Option<String>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let action_clean = action.trim().to_lowercase();
+        let query_clean = query.as_deref().map(str::trim).filter(|s| !s.is_empty());
+
+        if let Some(q) = query_clean {
+            // Якщо запитано відтворення улюблених треків, спочатку пробуємо відновити вже відкритий плеєр на паузі
+            if (action_clean == "play" || action_clean == "open_and_play" || action_clean == "play_query")
+                && (q == "liked_music" || q == "liked")
+            {
+                if resume_media_player() {
+                    return Ok("Продовжую відтворення музики ▶️".to_string());
+                }
+            }
+
+            if action_clean == "play_query" || action_clean == "open_and_play" || (action_clean == "play" && !q.is_empty()) {
+                return open_and_play_query(q);
+            }
+        }
+
+        if action_clean == "pause" {
+            let handled = pause_media_player();
+            if handled {
+                return Ok("Музику поставлено на паузу ⏸️".to_string());
+            } else {
+                return Ok("Команда паузи надіслана ⏸️".to_string());
+            }
+        }
+
+        if action_clean == "next" {
+            let handled = next_media_player();
+            if handled {
+                return Ok("Увімкнено наступний трек ⏭️".to_string());
+            } else {
+                return Ok("Команда наступного треку надіслана ⏭️".to_string());
+            }
+        }
+
+        if action_clean == "prev" || action_clean == "previous" {
+            let handled = prev_media_player();
+            if handled {
+                return Ok("Увімкнено попередній трек ⏮️".to_string());
+            } else {
+                return Ok("Команда попереднього треку надіслана ⏮️".to_string());
+            }
+        }
+
+        // Дія "play" без query:
+        // 1. Спочатку пробуємо відновити вже відкритий плеєр у системі (браузер YouTube Music / Spotify тощо)
+        let resumed = resume_media_player();
+        if resumed {
+            return Ok("Продовжую відтворення музики ▶️".to_string());
+        }
+
+        // 2. Якщо плеєр не був активний — вмикаємо особистий плейлист уподобань користувача (Liked Music)
+        open_and_play_query("liked_music")
+    })
+    .await
+    .map_err(|e| format!("Помилка обробки медіа: {}", e))?
+}
+
+const MAX_MEMORY_FACTS: usize = 25;
+const MAX_FACT_CHARS: usize = 220;
+const MAX_RECENT_MESSAGES: usize = 10;
+const MAX_MESSAGE_CHARS: usize = 450;
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+pub struct MemoryMessage {
+    pub role: String,
+    pub text: String,
+    pub timestamp: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+pub struct AgentMemory {
+    #[serde(default)]
+    pub facts: Vec<String>,
+    #[serde(default)]
+    pub recent_messages: Vec<MemoryMessage>,
+}
+
+fn truncate_memory_text(input: &str, max_chars: usize) -> String {
+    let trimmed = input.trim();
+    if trimmed.chars().count() <= max_chars {
+        trimmed.to_string()
+    } else {
+        let mut s: String = trimmed.chars().take(max_chars).collect();
+        s.push_str("…");
+        s
+    }
+}
+
+pub fn get_memory_file_path() -> Result<PathBuf, String> {
+    let config_path = get_user_config_path()?;
+    if let Some(parent) = config_path.parent() {
+        return Ok(parent.join("memory.json"));
+    }
+    let home = get_home_dir()?;
+    Ok(home.join(".config").join("local-helper-ai").join("memory.json"))
+}
+
+fn read_agent_memory_sync() -> AgentMemory {
+    if let Ok(path) = get_memory_file_path() {
+        if path.exists() {
+            if let Ok(raw) = fs::read_to_string(&path) {
+                if let Ok(mem) = serde_json::from_str::<AgentMemory>(&raw) {
+                    return mem;
+                }
+            }
+        }
+    }
+    AgentMemory::default()
+}
+
+fn write_agent_memory_sync(mem: &AgentMemory) -> Result<(), String> {
+    let path = get_memory_file_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "Не вдалося створити директорію пам'яті {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
+    }
+    let json = serde_json::to_string_pretty(mem)
+        .map_err(|e| format!("Помилка серіалізації пам'яті: {}", e))?;
+    fs::write(&path, json).map_err(|e| {
+        format!(
+            "Не вдалося зберегти пам'ять у {}: {}",
+            path.display(),
+            e
+        )
+    })
+}
+
+#[tauri::command]
+async fn get_agent_memory() -> Result<AgentMemory, String> {
+    tauri::async_runtime::spawn_blocking(read_agent_memory_sync)
+        .await
+        .map_err(|e| format!("Помилка читання пам'яті: {}", e))
+}
+
+#[tauri::command]
+async fn append_conversation_turn(user_text: String, model_text: String) -> Result<AgentMemory, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut mem = read_agent_memory_sync();
+        let now = Local::now().format("%Y-%m-%d %H:%M").to_string();
+
+        let clean_user = truncate_memory_text(&user_text, MAX_MESSAGE_CHARS);
+        let clean_model = truncate_memory_text(&model_text, MAX_MESSAGE_CHARS);
+
+        if !clean_user.is_empty() {
+            mem.recent_messages.push(MemoryMessage {
+                role: "user".to_string(),
+                text: clean_user,
+                timestamp: now.clone(),
+            });
+        }
+        if !clean_model.is_empty() {
+            mem.recent_messages.push(MemoryMessage {
+                role: "model".to_string(),
+                text: clean_model,
+                timestamp: now,
+            });
+        }
+
+        if mem.recent_messages.len() > MAX_RECENT_MESSAGES {
+            let drain_count = mem.recent_messages.len() - MAX_RECENT_MESSAGES;
+            mem.recent_messages.drain(0..drain_count);
+        }
+
+        write_agent_memory_sync(&mem)?;
+        Ok(mem)
+    })
+    .await
+    .map_err(|e| format!("Помилка збереження діалогу: {}", e))?
+}
+
+#[tauri::command]
+async fn manage_memory(action: String, fact: Option<String>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut mem = read_agent_memory_sync();
+        let act = action.trim().to_lowercase();
+        let raw_fact = fact.unwrap_or_default();
+        let clean_fact = truncate_memory_text(&raw_fact, MAX_FACT_CHARS);
+
+        match act.as_str() {
+            "remember" | "add" | "save" => {
+                if clean_fact.is_empty() {
+                    return Err("Порожній факт для запам'ятовування".to_string());
+                }
+                let lower = clean_fact.to_lowercase();
+                if !mem.facts.iter().any(|f| f.to_lowercase() == lower) {
+                    mem.facts.push(clean_fact.clone());
+                    if mem.facts.len() > MAX_MEMORY_FACTS {
+                        let excess = mem.facts.len() - MAX_MEMORY_FACTS;
+                        mem.facts.drain(0..excess);
+                    }
+                    write_agent_memory_sync(&mem)?;
+                }
+                Ok(format!("Запам'ятав: {}", clean_fact))
+            }
+            "forget" | "remove" | "delete" => {
+                if clean_fact.is_empty() {
+                    return Err("Не вказано, що саме потрібно забути".to_string());
+                }
+                let lower = clean_fact.to_lowercase();
+                let before = mem.facts.len();
+                mem.facts.retain(|f| !f.to_lowercase().contains(&lower));
+                let removed = before.saturating_sub(mem.facts.len());
+                write_agent_memory_sync(&mem)?;
+                Ok(format!("Видалено записів із пам'яті: {}", removed))
+            }
+            "clear_all" | "clear" => {
+                mem.facts.clear();
+                mem.recent_messages.clear();
+                write_agent_memory_sync(&mem)?;
+                Ok("Пам'ять та історію розмов повністю очищено.".to_string())
+            }
+            "list" | _ => {
+                if mem.facts.is_empty() {
+                    Ok("Довгострокова пам'ять поки порожня.".to_string())
+                } else {
+                    Ok(format!("Збережені факти:\n- {}", mem.facts.join("\n- ")))
+                }
+            }
+        }
+    })
+    .await
+    .map_err(|e| format!("Помилка керування пам'яттю: {}", e))?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1191,7 +1904,11 @@ pub fn run() {
             cancel_voice_recording,
             read_image_base64,
             read_clipboard_image,
-            get_app_config
+            get_app_config,
+            control_media,
+            get_agent_memory,
+            append_conversation_turn,
+            manage_memory
         ])
         .run(tauri::generate_context!())
         .expect("Помилка запуску Tauri-застосунку");

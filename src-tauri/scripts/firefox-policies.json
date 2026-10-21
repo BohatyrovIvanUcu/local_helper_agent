@@ -1,0 +1,13 @@
+{
+  "policies": {
+    "Permissions": {
+      "Autoplay": {
+        "Allow": [
+          "https://music.youtube.com",
+          "https://www.youtube.com"
+        ]
+      }
+    }
+  }
+}
+

@@ -12,7 +12,20 @@ export type WorkingToolName =
   | "append_to_obsidian"
   | "create_or_update_file"
   | "read_file_or_dir"
-  | "run_cli_command";
+  | "run_cli_command"
+  | "control_media"
+  | "manage_memory";
+
+export interface MemoryMessage {
+  role: string;
+  text: string;
+  timestamp: string;
+}
+
+export interface AgentMemory {
+  facts: string[];
+  recent_messages: MemoryMessage[];
+}
 
 export interface AppConfig {
   gemini_api_key: string;
@@ -35,10 +48,25 @@ export async function getAppConfig(): Promise<AppConfig> {
   }
 }
 
-function getSystemInstruction(): string {
+export async function getAgentMemory(): Promise<AgentMemory> {
+  try {
+    return await invoke<AgentMemory>("get_agent_memory");
+  } catch {
+    return { facts: [], recent_messages: [] };
+  }
+}
+
+function getSystemInstruction(memoryFacts: string[] = []): string {
   const now = new Date();
   const isoDate = now.toISOString().slice(0, 10);
   const weekday = now.toLocaleDateString("uk-UA", { weekday: "long" });
+
+  const factsSection =
+    memoryFacts.length > 0
+      ? `\nДовгострокова пам'ять про користувача та його контекст (враховуй ці факти):\n${memoryFacts
+          .map((f) => `- ${f}`)
+          .join("\n")}\n`
+      : "";
 
   return `Ти — кмітливий десктопний маскот-будівельник у жовтій касці, локальний AI-помічник користувача.
 Твій стиль: дружній, лаконічний, конкретний тон майстра-помічника без зайвої води (1–3 короткі речення).
@@ -46,7 +74,7 @@ function getSystemInstruction(): string {
 
 Поточний час та дата: ${isoDate} (сьогодні: ${weekday}).
 Головний файл для користувача: 'TODO.md' в Obsidian (дошка Kanban).
-
+${factsSection}
 Колонки у файлі TODO.md:
 1. "TO DO" — для поточних задач, справ, дій, дедлайнів (section: "TO DO", as_todo: true).
 2. "Ideas" — для нових ідей, креативних думок, пропозицій, інсайтів на майбутнє (section: "Ideas", as_todo: true).
@@ -71,8 +99,29 @@ function getSystemInstruction(): string {
 2. create_or_update_file — створюй або оновлюй файли проєктів, скрипти, шаблони за вказаним шляхом (підтримується ~).
 3. read_file_or_dir — перевіряй вміст файлів (включно з TODO.md) або список директорій перед змінами чи плануванням.
 4. run_cli_command — виконуй термінальні команди, коли потрібно перевірити статус git, список процесів або запустити скрипт.
+5. control_media — керуй відтворенням музики (play, pause, next, prev, liked_music, my_mix).
+6. manage_memory — зберігай або видаляй важливі факти у своїй довгостроковій пам'яті між перезапусками.
 
-Завжди виконуй дію через відповідний інструмент, якщо запит передбачає роботу з нотатками, файлами чи терміналом, і коротко звітуй про результат.`;
+Робота з пам'яттю (manage_memory):
+- Якщо користувач ділиться важливим фактом про себе, свої проєкти, шляхи до робочих папок, університет, улюблені сервіси/браузер або прямо каже "запам'ятай..." — виклич manage_memory(action: "remember", fact: "короткий факт 1 реченням").
+- Якщо користувач просить забути щось конкретне — виклич manage_memory(action: "forget", fact: "ключові слова").
+- Якщо користувач просить повністю очистити пам'ять або історію діалогу — виклич manage_memory(action: "clear_all").
+
+Керування музикою та медіа:
+Коли користувач каже: "включи музику", "грай", "постав пісню", "включи мої лайки", "включи мій плейлист", "улюблена музика", "рекомендації", "пауза", "зупини музику", "продовж", "наступний трек", "попередня пісня":
+- ЗАВЖДИ викликай інструмент 'control_media'!
+- КАТЕГОРИЧНО НЕ використовуй run_cli_command з bare посиланням на головну сторінку на кшталт 'xdg-open https://music.youtube.com', бо це лише відкриває порожню головну сторінку без відтворення!
+- Якщо користувач просить увімкнути музику без назви ("включи музику", "включи мою музику", "мої лайки", "улюблені треки", "мій плейлист"):
+  викликай control_media(action: "play", query: "liked_music"). Цей інструмент або продовжить відтворення вже відкритого у браузері треку, або одразу увімкне особистий плейлист уподобань користувача (Liked Music).
+- Якщо користувач просить персональні рекомендації чи мікс ("включи рекомендації", "новинки", "мій мікс"):
+  викликай control_media(action: "play", query: "my_mix").
+- Якщо користувач вказує назву пісні, виконавця чи жанр (наприклад, "включи Did It First", "включи Скрябіна", "включи рок"):
+  викликай control_media(action: "play", query: "назва пісні чи виконавець"). Інструмент знайде прямий трек і одразу запустить його відтворення.
+- Для паузи ("зупини", "пауза"): викликай control_media(action: "pause").
+- Для наступного треку: викликай control_media(action: "next").
+- Для попереднього треку: викликай control_media(action: "prev").
+
+Завжди виконуй дію через відповідний інструмент, якщо запит передбачає роботу з нотатками, файлами, терміналом, пам'яттю або музикою, і коротко звітуй про результат.`;
 }
 
 export const toolDeclarations: FunctionDeclaration[] = [
@@ -168,6 +217,48 @@ export const toolDeclarations: FunctionDeclaration[] = [
       required: ["command"],
     },
   },
+  {
+    name: "control_media",
+    description:
+      "Керує відтворенням музики та мультимедіа на комп'ютері. Може натискати Play/Pause на активному плеєрі (включно з YouTube Music у браузері чи Spotify) або знаходити та вмикати конкретний трек чи жанр одразу з відтворенням.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        action: {
+          type: Type.STRING,
+          description:
+            "Дія з відтворенням: 'play' (увімкнути або продовжити), 'pause' (поставити на паузу), 'next' (наступний трек), 'prev' (попередній трек).",
+        },
+        query: {
+          type: Type.STRING,
+          description:
+            "Необов'язкова назва пісні, виконавця чи жанру (наприклад: 'Did It First', 'Скрябін', 'lofi beats'). Залиш null, якщо користувач просто сказав 'включи музику'.",
+        },
+      },
+      required: ["action"],
+    },
+  },
+  {
+    name: "manage_memory",
+    description:
+      "Керує довгостроковою пам'яттю маскота про користувача, його вподобання, проєкти та контекст між перезапусками.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        action: {
+          type: Type.STRING,
+          description:
+            "Дія: 'remember' (зберегти новий факт у пам'ять), 'forget' (видалити факт за ключовим словом), 'clear_all' (повністю очистити пам'ять та історію розмов), 'list' (показати збережені факти).",
+        },
+        fact: {
+          type: Type.STRING,
+          description:
+            "Короткий факт (1 речення) для запам'ятовування (при action='remember') або ключове слово для видалення (при action='forget').",
+        },
+      },
+      required: ["action"],
+    },
+  },
 ];
 
 async function executeLocalRustTool(
@@ -176,6 +267,26 @@ async function executeLocalRustTool(
 ): Promise<{ ok: boolean; output: string }> {
   try {
     switch (name) {
+      case "manage_memory": {
+        const res = await invoke<string>("manage_memory", {
+          action: String(args.action || "remember"),
+          fact:
+            typeof args.fact === "string" && args.fact.trim() !== ""
+              ? args.fact.trim()
+              : null,
+        });
+        return { ok: true, output: res };
+      }
+      case "control_media": {
+        const res = await invoke<string>("control_media", {
+          action: String(args.action || "play"),
+          query:
+            typeof args.query === "string" && args.query.trim() !== ""
+              ? args.query.trim()
+              : null,
+        });
+        return { ok: true, output: res };
+      }
       case "append_to_obsidian": {
         const res = await invoke<string>("append_to_obsidian", {
           subfolder:
@@ -246,15 +357,16 @@ export interface AskMascotCallbacks {
   onStateChange: (state: MascotState, activeTool?: WorkingToolName) => void;
 }
 
-const chatHistory: Content[] = [];
-const MAX_HISTORY_ITEMS = 12;
-
 export async function askMascot(
   userPrompt: string,
   callbacks: AskMascotCallbacks,
   attachments: MediaAttachment[] = []
 ): Promise<string> {
-  const config = await getAppConfig();
+  const [config, memory] = await Promise.all([
+    getAppConfig(),
+    getAgentMemory(),
+  ]);
+
   const apiKey =
     config.gemini_api_key?.trim() ||
     import.meta.env.VITE_GEMINI_API_KEY?.trim();
@@ -303,8 +415,13 @@ export async function askMascot(
     userParts.push({ text: effectiveText });
   }
 
+  const persistedHistory: Content[] = memory.recent_messages.map((msg) => ({
+    role: msg.role === "model" ? "model" : "user",
+    parts: [{ text: msg.text }],
+  }));
+
   const contents: Content[] = [
-    ...chatHistory,
+    ...persistedHistory,
     {
       role: "user",
       parts: userParts,
@@ -319,6 +436,10 @@ export async function askMascot(
     .filter(Boolean)
     .join(" ");
 
+  let currentFacts = [...memory.facts];
+  const executedToolsLog: string[] = [];
+  let memoryWasCleared = false;
+
   const MAX_TOOL_TURNS = 5;
   let turn = 0;
 
@@ -329,7 +450,7 @@ export async function askMascot(
       model: effectiveModel,
       contents,
       config: {
-        systemInstruction: getSystemInstruction(),
+        systemInstruction: getSystemInstruction(currentFacts),
         tools: [{ functionDeclarations: toolDeclarations }],
         temperature: 0.3,
       },
@@ -341,12 +462,19 @@ export async function askMascot(
       const replyText =
         response.text?.trim() || "Готово! Завдання виконано.";
 
-      chatHistory.push(
-        { role: "user", parts: [{ text: historySummaryText || effectiveText }] },
-        { role: "model", parts: [{ text: replyText }] }
-      );
-      if (chatHistory.length > MAX_HISTORY_ITEMS) {
-        chatHistory.splice(0, chatHistory.length - MAX_HISTORY_ITEMS);
+      if (!memoryWasCleared) {
+        const toolPrefix =
+          executedToolsLog.length > 0
+            ? `[Виконано: ${executedToolsLog.join(", ")}] `
+            : "";
+        try {
+          await invoke("append_conversation_turn", {
+            userText: historySummaryText || effectiveText,
+            modelText: `${toolPrefix}${replyText}`,
+          });
+        } catch {
+          // Ігноруємо помилку запису у фоновому режимі
+        }
       }
 
       return replyText;
@@ -372,6 +500,18 @@ export async function askMascot(
       const args = (call.args as Record<string, unknown>) ?? {};
       const result = await executeLocalRustTool(toolName, args);
 
+      executedToolsLog.push(toolName);
+      if (toolName === "manage_memory") {
+        const act = String(args.action || "").toLowerCase();
+        if (act === "clear_all" || act === "clear") {
+          memoryWasCleared = true;
+          currentFacts = [];
+        } else {
+          const updatedMem = await getAgentMemory();
+          currentFacts = updatedMem.facts;
+        }
+      }
+
       responseParts.push({
         functionResponse: {
           id: call.id,
@@ -392,6 +532,18 @@ export async function askMascot(
     callbacks.onStateChange("THINKING");
   }
 
-  return "Виконав серію дій! Перевір результат.";
+  const fallbackReply = "Виконав серію дій! Перевір результат.";
+  if (!memoryWasCleared) {
+    try {
+      await invoke("append_conversation_turn", {
+        userText: historySummaryText || effectiveText,
+        modelText: fallbackReply,
+      });
+    } catch {
+      // Ігноруємо помилку запису
+    }
+  }
+
+  return fallbackReply;
 }
 

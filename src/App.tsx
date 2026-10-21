@@ -28,6 +28,8 @@ const TOOL_LABELS: Record<WorkingToolName, string> = {
   create_or_update_file: "Майструю файл...",
   read_file_or_dir: "Вивчаю креслення й файли...",
   run_cli_command: "Виконую команду...",
+  control_media: "Керую музикою 🎵...",
+  manage_memory: "Запам'ятовую контекст 🧠...",
 };
 
 interface ClipboardImagePayload {
