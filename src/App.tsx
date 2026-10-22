@@ -10,7 +10,11 @@ import { AnimatePresence, motion, type TargetAndTransition } from "framer-motion
 import {
   AlertTriangle,
   Bell,
+  ChevronsDownUp,
+  ChevronsUpDown,
   CornerDownLeft,
+  ExternalLink,
+  Hourglass,
   Mic,
   Paperclip,
   Sparkles,
@@ -20,9 +24,11 @@ import {
 } from "lucide-react";
 import {
   askMascot,
+  formatGeminiError,
   type MascotState,
   type MediaAttachment,
   type WorkingToolName,
+  type ConfirmationRequest,
 } from "./services/gemini";
 
 // Синтетичний приємний дзвіночок нагадування через Web Audio API
@@ -67,6 +73,7 @@ const TOOL_LABELS: Record<WorkingToolName, string> = {
   control_media: "Керую музикою 🎵...",
   manage_memory: "Запам'ятовую контекст 🧠...",
   manage_reminders: "Налаштовую нагадування ⏰...",
+  summarize_webpage: "Аналізую веб-сторінку 🌐...",
 };
 
 interface ClipboardImagePayload {
@@ -167,7 +174,8 @@ function getMascotSprite(
     case "WORKING":
       if (
         activeTool === "read_file_or_dir" ||
-        activeTool === "append_to_obsidian"
+        activeTool === "append_to_obsidian" ||
+        activeTool === "summarize_webpage"
       ) {
         return "/mascot/working-blueprint.png";
       }
@@ -252,6 +260,55 @@ function getMascotAnimation(
   }
 }
 
+function renderBubbleContent(text: string) {
+  const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s)]+)/g;
+  const elements: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = linkRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      elements.push(text.slice(lastIndex, match.index));
+    }
+
+    const label = match[1] || match[3];
+    const url = match[2] || match[3];
+
+    elements.push(
+      <a
+        key={`${url}-${match.index}`}
+        href={url}
+        onClick={(e) => {
+          e.preventDefault();
+          invoke("open_external_url", { url }).catch(() => {});
+        }}
+        title={`Відкрити посилання: ${url}`}
+        className="inline-flex items-center gap-0.5 font-medium text-amber-400 underline decoration-amber-400/50 underline-offset-2 transition-colors hover:text-amber-300 hover:decoration-amber-300 cursor-pointer"
+      >
+        <span>{label}</span>
+        <ExternalLink className="inline h-2.5 w-2.5 opacity-80" />
+      </a>
+    );
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < text.length) {
+    elements.push(text.slice(lastIndex));
+  }
+
+  return elements.length > 0 ? elements : text;
+}
+
+export function cleanBubbleText(text: string | null | undefined): string | null {
+  if (!text) return null;
+  let cleaned = text.trim();
+  while (/^\[[^\]]+\]\s*/.test(cleaned)) {
+    cleaned = cleaned.replace(/^\[[^\]]+\]\s*/, "").trim();
+  }
+  return cleaned || null;
+}
+
 export default function App() {
   const [mascotState, setMascotState] = useState<MascotState>("IDLE");
   const [activeTool, setActiveTool] = useState<WorkingToolName | undefined>(
@@ -260,6 +317,7 @@ export default function App() {
   const [isInputOpen, setIsInputOpen] = useState<boolean>(false);
   const [prompt, setPrompt] = useState<string>("");
   const [bubbleText, setBubbleText] = useState<string | null>(null);
+  const [isExpanded, setIsExpanded] = useState<boolean>(false);
   const [attachedImage, setAttachedImage] = useState<MediaAttachment | null>(
     null
   );
@@ -268,20 +326,16 @@ export default function App() {
   const [isRecording, setIsRecording] = useState<boolean>(false);
   const [recordingSeconds, setRecordingSeconds] = useState<number>(0);
   const [isMusicPlaying, setIsMusicPlaying] = useState<boolean>(false);
+  const [pendingConfirmation, setPendingConfirmation] = useState<{
+    request: ConfirmationRequest;
+    resolve: (approved: boolean) => void;
+  } | null>(null);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const successTimerRef = useRef<number | null>(null);
   const bubbleTimerRef = useRef<number | null>(null);
   const recordingTimerRef = useRef<number | null>(null);
-
-  // Зберігає координату вікна до авто-зсуву біля країв екрана (низ та правий край)
-  const shiftedPosRef = useRef<{
-    origX: number;
-    origY: number;
-    shiftedX: number;
-    shiftedY: number;
-  } | null>(null);
 
   // Реф для відстеження Drag vs Click (> 5px)
   const pointerStateRef = useRef<{
@@ -307,10 +361,44 @@ export default function App() {
         : "Виконую локальну дію..."
       : null;
 
-  const displayedBubble = statusBanner ?? bubbleText;
-  const isPopupActive = isInputOpen || Boolean(displayedBubble);
+  const rawBubble = pendingConfirmation
+    ? pendingConfirmation.request.title
+    : statusBanner ?? bubbleText;
+  const displayedBubble = cleanBubbleText(rawBubble);
+  const isPopupActive =
+    isInputOpen || Boolean(displayedBubble) || Boolean(pendingConfirmation);
+  const isOverloadNotice = Boolean(
+    displayedBubble?.includes("⏳") || displayedBubble?.includes("перевантажені")
+  );
 
-  // Авто-зсув вікна, якщо воно стоїть біля низу або правого краю екрана і відкривається інпут/хмаринка
+  const toggleExpanded = async () => {
+    const next = !isExpanded;
+    setIsExpanded(next);
+    try {
+      await invoke("set_window_expanded", { expanded: next });
+    } catch (err) {
+      console.error("Failed to resize window:", err);
+    }
+  };
+
+  const handleCloseBubble = async () => {
+    if (isExpanded) {
+      setIsExpanded(false);
+      invoke("set_window_expanded", { expanded: false }).catch(() => {});
+    }
+    if (pendingConfirmation) {
+      const cb = pendingConfirmation.resolve;
+      setPendingConfirmation(null);
+      cb(false);
+    } else {
+      setBubbleText(null);
+      setMascotState((current) =>
+        current === "SUCCESS" || current === "ERROR" ? "IDLE" : current
+      );
+    }
+  };
+
+  // Авто-зсув вікна в безпечну зону, якщо воно стоїть біля краю екрана і відкривається інпут/хмаринка
   useEffect(() => {
     let cancelled = false;
 
@@ -327,45 +415,24 @@ export default function App() {
           const monitorBottom = monitor.position.y + monitor.size.height;
           const monitorRight = monitor.position.x + monitor.size.width;
 
-          // Ліміт по нижньому краю
-          const maxAllowedY = monitorBottom - 180;
-          const targetY =
-            pos.y > maxAllowedY ? Math.max(monitor.position.y + 16, maxAllowedY) : pos.y;
+          // Ліміт по нижньому краю (висота вікна 240px або 440px + безпечний відступ 16px)
+          const windowHeight = isExpanded ? 440 : 240;
+          const bottomSafeMargin = 16;
+          const maxAllowedY = monitorBottom - windowHeight - bottomSafeMargin;
+          const minAllowedY = monitor.position.y + 16;
+          const targetY = Math.max(minAllowedY, Math.min(pos.y, maxAllowedY));
 
-          // Ліміт по правому краю (ширина вікна 280px + безпечний відступ 12px)
-          const windowWidth = 280;
-          const rightSafeMargin = 12;
+          // Ліміт по правому краю (ширина вікна 280px або 380px + безпечний відступ 16px)
+          const windowWidth = isExpanded ? 380 : 280;
+          const rightSafeMargin = 16;
           const maxAllowedX = monitorRight - windowWidth - rightSafeMargin;
-          const minAllowedX = monitor.position.x + 12;
+          const minAllowedX = monitor.position.x + 16;
           const targetX = Math.max(minAllowedX, Math.min(pos.x, maxAllowedX));
 
           const needsShift = targetX !== pos.x || targetY !== pos.y;
 
           if (needsShift) {
-            if (!shiftedPosRef.current) {
-              shiftedPosRef.current = {
-                origX: pos.x,
-                origY: pos.y,
-                shiftedX: targetX,
-                shiftedY: targetY,
-              };
-            } else {
-              shiftedPosRef.current.shiftedX = targetX;
-              shiftedPosRef.current.shiftedY = targetY;
-            }
             await win.setPosition(new PhysicalPosition(targetX, targetY));
-          }
-        } else if (shiftedPosRef.current) {
-          const saved = shiftedPosRef.current;
-          shiftedPosRef.current = null;
-          const pos = await win.outerPosition();
-          if (cancelled) return;
-
-          if (
-            Math.abs(pos.x - saved.shiftedX) <= 20 &&
-            Math.abs(pos.y - saved.shiftedY) <= 20
-          ) {
-            await win.setPosition(new PhysicalPosition(saved.origX, saved.origY));
           }
         }
       } catch {
@@ -377,7 +444,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [isPopupActive]);
+  }, [isPopupActive, isExpanded]);
 
   // Автофокус на рядок вводу при його відкритті
   useEffect(() => {
@@ -391,7 +458,7 @@ export default function App() {
 
   // Захисний таймер: маскот ніколи не повинен зависати в стані WORKING/THINKING довше 16 секунд
   useEffect(() => {
-    if (!isBusy) return;
+    if (!isBusy || pendingConfirmation !== null) return;
     const safetyTimer = window.setTimeout(() => {
       setMascotState("IDLE");
       setActiveTool(undefined);
@@ -399,7 +466,7 @@ export default function App() {
     }, 16000);
 
     return () => window.clearTimeout(safetyTimer);
-  }, [isBusy]);
+  }, [isBusy, pendingConfirmation]);
 
   // Таймер секунд під час активного запису голосу
   useEffect(() => {
@@ -428,7 +495,13 @@ export default function App() {
       bubbleTimerRef.current = null;
     }
 
-    if (bubbleText && !isBusy && bubbleText.length <= 180) {
+    if (
+      bubbleText &&
+      !isBusy &&
+      !isExpanded &&
+      pendingConfirmation === null &&
+      bubbleText.length <= 180
+    ) {
       const isReminder = bubbleText.startsWith("🔔") || bubbleText.startsWith("⚠️");
       const timeoutMs = isReminder ? 14000 : 9000;
 
@@ -445,7 +518,7 @@ export default function App() {
         window.clearTimeout(bubbleTimerRef.current);
       }
     };
-  }, [bubbleText, isBusy]);
+  }, [bubbleText, isBusy, isExpanded]);
 
   // Прослуховування системних нагадувань і таймерів від фонового планувальника Rust
   useEffect(() => {
@@ -651,6 +724,19 @@ export default function App() {
     };
 
     const onKeyDown = async (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (isExpanded) {
+          e.preventDefault();
+          setIsExpanded(false);
+          invoke("set_window_expanded", { expanded: false }).catch(() => {});
+          return;
+        } else if (bubbleText && !isBusy) {
+          e.preventDefault();
+          setBubbleText(null);
+          return;
+        }
+      }
+
       const isPasteKey =
         (e.ctrlKey || e.metaKey) &&
         (e.code === "KeyV" ||
@@ -681,7 +767,7 @@ export default function App() {
       window.removeEventListener("paste", onDocPaste, true);
       window.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [isInputOpen]);
+  }, [isInputOpen, isExpanded, bubbleText, isBusy]);
 
   // Обробка перетягування вікна vs короткого кліку по маскоту
   const handleMascotMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -703,7 +789,6 @@ export default function App() {
       if (Math.hypot(dx, dy) > 5) {
         state.hasDragged = true;
         state.isDown = false;
-        shiftedPosRef.current = null;
         cleanupListeners();
         getCurrentWindow()
           .startDragging()
@@ -718,6 +803,10 @@ export default function App() {
       cleanupListeners();
 
       if (wasClick) {
+        if (isExpanded) {
+          setIsExpanded(false);
+          invoke("set_window_expanded", { expanded: false }).catch(() => {});
+        }
         if (isBusy) {
           // Якщо маскот завис під час тривалої операції — клік по ньому повертає управління
           setMascotState("IDLE");
@@ -762,6 +851,10 @@ export default function App() {
     setAttachedImage(null);
     setIsInputOpen(false);
     setBubbleText(null);
+    if (isExpanded) {
+      setIsExpanded(false);
+      invoke("set_window_expanded", { expanded: false }).catch(() => {});
+    }
 
     try {
       const reply = await askMascot(
@@ -771,11 +864,15 @@ export default function App() {
             setMascotState(nextState);
             setActiveTool(toolName);
           },
+          onConfirmRequest: (request) =>
+            new Promise<boolean>((resolve) => {
+              setPendingConfirmation({ request, resolve });
+            }),
         },
         mediaItems
       );
 
-      setBubbleText(reply);
+      setBubbleText(cleanBubbleText(reply));
       setMascotState("SUCCESS");
       setActiveTool(undefined);
 
@@ -783,15 +880,15 @@ export default function App() {
         setMascotState("IDLE");
       }, 2500);
     } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : "Сталася непередбачена помилка.";
+      const msg = formatGeminiError(err);
       setBubbleText(msg);
       setMascotState("ERROR");
       setActiveTool(undefined);
 
+      const isOverloaded = msg.includes("⏳") || msg.includes("перевантажені");
       successTimerRef.current = window.setTimeout(() => {
         setMascotState("IDLE");
-      }, 4000);
+      }, isOverloaded ? 7500 : 4500);
     }
   };
 
@@ -804,8 +901,7 @@ export default function App() {
         await invoke("start_voice_recording");
         setIsRecording(true);
       } catch (err) {
-        const msg =
-          err instanceof Error ? err.message : String(err);
+        const msg = formatGeminiError(err);
         setBubbleText(msg);
         setMascotState("ERROR");
       }
@@ -824,8 +920,7 @@ export default function App() {
         });
         await executePromptRequest(prompt.trim(), attachments);
       } catch (err) {
-        const msg =
-          err instanceof Error ? err.message : String(err);
+        const msg = formatGeminiError(err);
         setBubbleText(msg);
         setMascotState("ERROR");
       }
@@ -900,7 +995,9 @@ export default function App() {
         }
       }}
       onDrop={handleDrop}
-      className="relative flex h-[240px] w-[280px] flex-col items-center justify-start bg-transparent px-3 pt-3 select-none"
+      className={`relative flex ${
+        isExpanded ? "h-[440px] w-[380px]" : "h-[240px] w-[280px]"
+      } flex-col items-center justify-start bg-transparent px-3 pt-3 select-none transition-all duration-200`}
     >
       {/* Прихований input для кнопки «Скріпка» */}
       <input
@@ -972,7 +1069,9 @@ export default function App() {
             alt={`Mascot ${mascotState}`}
             draggable={false}
             className={`pointer-events-none h-[110px] w-[110px] object-contain drop-shadow-[0_6px_12px_rgba(0,0,0,0.45)] transition-all duration-200 ${
-              mascotState === "ERROR" ? "hue-rotate-[-35deg] saturate-150" : ""
+              mascotState === "ERROR" && !isOverloadNotice
+                ? "hue-rotate-[-35deg] saturate-150"
+                : ""
             }`}
           />
         </motion.div>
@@ -989,9 +1088,13 @@ export default function App() {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -4, scale: 0.94 }}
               transition={{ duration: 0.18, ease: "easeOut" }}
-              className={`relative max-h-[95px] w-full overflow-y-auto rounded-2xl border px-3 py-2 text-xs leading-relaxed shadow-lg backdrop-blur-md ${
+              className={`relative ${
+                isExpanded ? "max-h-[295px]" : "max-h-[105px]"
+              } w-full overflow-y-auto rounded-2xl border px-3 py-2 text-xs leading-relaxed shadow-lg backdrop-blur-md transition-all duration-200 ${
                 mascotState === "ERROR"
-                  ? "border-red-500/60 bg-zinc-900/95 text-red-200"
+                  ? isOverloadNotice
+                    ? "border-amber-400/80 bg-zinc-900/95 text-amber-100 ring-1 ring-amber-400/50 shadow-md shadow-amber-500/20"
+                    : "border-red-500/60 bg-zinc-900/95 text-red-200"
                   : displayedBubble?.startsWith("🔔")
                   ? "border-amber-400 bg-zinc-900/95 text-amber-100 ring-1 ring-amber-400/50 shadow-md shadow-amber-500/20"
                   : "border-zinc-700/60 bg-zinc-900/90 text-zinc-100"
@@ -1001,15 +1104,29 @@ export default function App() {
               <div
                 className={`absolute -top-1.5 left-1/2 h-3 w-3 -translate-x-1/2 rotate-45 border-l border-t ${
                   mascotState === "ERROR"
-                    ? "border-red-500/60 bg-zinc-900/95"
+                    ? isOverloadNotice
+                      ? "border-amber-400/80 bg-zinc-900/95"
+                      : "border-red-500/60 bg-zinc-900/95"
                     : displayedBubble?.startsWith("🔔")
                     ? "border-amber-400 bg-zinc-900/95"
                     : "border-zinc-700/60 bg-zinc-900/90"
                 }`}
               />
 
-              <div className="flex items-start justify-between gap-1.5">
+              <div className="flex items-center justify-between gap-1.5 pb-1">
+                {/* Лівий кут: Хрестик для закриття + статусний індикатор */}
                 <div className="flex items-center gap-1.5 font-medium text-amber-400">
+                  {!isBusy && (
+                    <button
+                      type="button"
+                      onClick={handleCloseBubble}
+                      aria-label="Закрити повідомлення"
+                      title="Закрити (Esc)"
+                      className="rounded-md p-0.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                   {displayedBubble?.startsWith("🔔") && (
                     <Bell className="h-3.5 w-3.5 animate-bounce text-amber-400" />
                   )}
@@ -1020,30 +1137,75 @@ export default function App() {
                     <Sparkles className="h-3.5 w-3.5 animate-pulse text-amber-400" />
                   )}
                   {mascotState === "ERROR" && (
-                    <AlertTriangle className="h-3.5 w-3.5 text-red-400" />
+                    isOverloadNotice ? (
+                      <Hourglass className="h-3.5 w-3.5 animate-pulse text-amber-400" />
+                    ) : (
+                      <AlertTriangle className="h-3.5 w-3.5 text-red-400" />
+                    )
                   )}
                 </div>
 
-                {!isBusy && (
+                {/* Правий кут: Дві стрілочки в лінію (розгорнути / згорнути вікно виводу) */}
+                {!isBusy && !pendingConfirmation && (
                   <button
                     type="button"
-                    onClick={() => {
-                      setBubbleText(null);
-                      setMascotState((current) =>
-                        current === "SUCCESS" || current === "ERROR" ? "IDLE" : current
-                      );
-                    }}
-                    aria-label="Закрити повідомлення"
+                    onClick={toggleExpanded}
+                    aria-label={
+                      isExpanded ? "Зменшити вікно виводу" : "Збільшити вікно виводу"
+                    }
+                    title={
+                      isExpanded ? "Зменшити вікно виводу" : "Збільшити вікно виводу"
+                    }
                     className="rounded-md p-0.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
                   >
-                    <X className="h-3.5 w-3.5" />
+                    {isExpanded ? (
+                      <ChevronsDownUp className="h-3.5 w-3.5 text-amber-400" />
+                    ) : (
+                      <ChevronsUpDown className="h-3.5 w-3.5" />
+                    )}
                   </button>
                 )}
               </div>
 
-              <p className="mt-0.5 whitespace-pre-wrap break-words pr-1 text-[12px] text-zinc-100">
-                {displayedBubble}
-              </p>
+              {pendingConfirmation ? (
+                <div className="mt-1 flex flex-col gap-1.5">
+                  <div className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-400">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+                    <span className="truncate">{pendingConfirmation.request.title}</span>
+                  </div>
+                  <div className="max-h-[36px] overflow-hidden text-ellipsis whitespace-nowrap rounded border border-zinc-700/50 bg-black/50 px-2 py-1 font-mono text-[10px] text-zinc-300">
+                    {pendingConfirmation.request.details}
+                  </div>
+                  <div className="flex items-center justify-end gap-1.5 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const cb = pendingConfirmation.resolve;
+                        setPendingConfirmation(null);
+                        cb(false);
+                      }}
+                      className="rounded bg-zinc-800 px-2.5 py-1 text-[11px] text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-white"
+                    >
+                      Скасувати
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const cb = pendingConfirmation.resolve;
+                        setPendingConfirmation(null);
+                        cb(true);
+                      }}
+                      className="rounded bg-amber-500 px-2.5 py-1 text-[11px] font-medium text-black transition-colors hover:bg-amber-400"
+                    >
+                      Підтвердити
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-0.5 whitespace-pre-wrap break-words pr-1 text-[12px] text-zinc-100">
+                  {renderBubbleContent(displayedBubble)}
+                </div>
+              )}
             </motion.div>
           )}
         </AnimatePresence>
