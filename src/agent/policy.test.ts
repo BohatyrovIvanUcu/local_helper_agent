@@ -124,6 +124,33 @@ describe("SafetyPolicy", () => {
     );
   });
 
+  it("allows safe audio and volume control commands without confirmation", () => {
+    assert.equal(
+      evaluatePolicy("run_cli_command", { command: "pactl set-sink-volume @DEFAULT_SINK@ +5%" }, dummyCtx).decision,
+      "allow"
+    );
+    assert.equal(
+      evaluatePolicy("run_cli_command", { command: "pactl set-sink-mute @DEFAULT_SINK@ toggle" }, dummyCtx).decision,
+      "allow"
+    );
+    assert.equal(
+      evaluatePolicy("run_cli_command", { command: "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+" }, dummyCtx).decision,
+      "allow"
+    );
+    assert.equal(
+      evaluatePolicy("run_cli_command", { command: "amixer set Master 10%+" }, dummyCtx).decision,
+      "allow"
+    );
+    assert.equal(
+      evaluatePolicy("run_cli_command", { command: "pamixer -i 5" }, dummyCtx).decision,
+      "allow"
+    );
+    assert.equal(
+      evaluatePolicy("run_cli_command", { command: "osascript -e 'set volume output volume 50'" }, dummyCtx).decision,
+      "allow"
+    );
+  });
+
   it("allows creating and editing safe text files (.txt, .md, .log, .json, .csv) anywhere non-sensitive", () => {
     assert.equal(
       evaluatePolicy("create_or_update_file", { filepath: "test.txt" }, dummyCtx).decision,

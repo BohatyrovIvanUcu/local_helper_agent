@@ -158,6 +158,19 @@ const APP_LAUNCH_COMMANDS = new Set([
   "pavucontrol",
 ]);
 
+const VOLUME_CONTROL_COMMANDS = new Set([
+  "pactl",
+  "wpctl",
+  "pamixer",
+  "amixer",
+  "alsamixer",
+  "alsactl",
+  "volumectl",
+  "playerctl",
+  "nircmd",
+  "nircmd.exe",
+]);
+
 function isSensitivePath(path: string): boolean {
   const normalized = path.replace(/\\/g, "/");
   return (
@@ -324,6 +337,19 @@ export function evaluatePolicy(
         continue;
       }
       if (baseBin === "gio" && tokens[1]?.toLowerCase() === "open") {
+        continue;
+      }
+
+      // Керування гучністю та аудіосистемою (pactl, wpctl, amixer, pamixer тощо)
+      if (VOLUME_CONTROL_COMMANDS.has(baseBin)) {
+        continue;
+      }
+
+      // macOS osascript для керування звуком (наприклад: osascript -e "set volume ...")
+      if (
+        baseBin === "osascript" &&
+        sub.toLowerCase().includes("set volume")
+      ) {
         continue;
       }
 
