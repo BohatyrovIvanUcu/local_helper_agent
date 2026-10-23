@@ -1328,9 +1328,7 @@ fn run_python_mpris_cmd(py_code: &str) -> Option<std::process::ExitStatus> {
             .stdin(Stdio::null())
             .status()
         {
-            if status.success() {
-                return Some(status);
-            }
+            return Some(status);
         }
     }
     Command::new("python3")
@@ -2022,13 +2020,12 @@ except Exception:
 sys.exit(1)
 "#;
         if let Some(status) = run_python_mpris_cmd(py_code) {
-            if status.code() == Some(0) {
-                LAST_KNOWN_MUSIC_PLAYING.store(true, Ordering::Relaxed);
-                return true;
-            } else if status.code() == Some(2) {
-                LAST_KNOWN_MUSIC_PLAYING.store(false, Ordering::Relaxed);
-                return false;
-            }
+            let is_playing = status.code() == Some(0);
+            LAST_KNOWN_MUSIC_PLAYING.store(is_playing, Ordering::Relaxed);
+            return is_playing;
+        } else {
+            LAST_KNOWN_MUSIC_PLAYING.store(false, Ordering::Relaxed);
+            return false;
         }
     }
 
@@ -2056,6 +2053,7 @@ end tell
         }
     }
 
+    #[allow(unreachable_code)]
     LAST_KNOWN_MUSIC_PLAYING.load(Ordering::Relaxed)
 }
 
@@ -3501,14 +3499,15 @@ pub fn run() {
 
                 // Головний цикл відліку часу та моніторингу фонової музики
                 let mut tick: u64 = 0;
-                let mut last_emitted_playing = false;
+                let mut last_emitted_playing = check_is_music_playing();
+                let _ = app_handle.emit("media-playback-changed", last_emitted_playing);
 
                 loop {
                     std::thread::sleep(Duration::from_secs(1));
                     tick += 1;
 
-                    // Кожні 4 секунди перевіряємо статус відтворення музики у браузері / системі
-                    if tick % 4 == 0 {
+                    // Кожні 2 секунди перевіряємо статус відтворення музики у браузері / системі
+                    if tick % 2 == 0 {
                         let is_playing = check_is_music_playing();
                         if is_playing != last_emitted_playing {
                             last_emitted_playing = is_playing;
