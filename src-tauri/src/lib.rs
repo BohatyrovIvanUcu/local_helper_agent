@@ -2045,7 +2045,9 @@ end tell
 
 #[tauri::command]
 async fn is_music_playing() -> Result<bool, String> {
-    Ok(check_is_music_playing())
+    tauri::async_runtime::spawn_blocking(check_is_music_playing)
+        .await
+        .map_err(|e| format!("Помилка перевірки музики: {}", e))
 }
 
 const MAX_MEMORY_FACTS: usize = 25;
@@ -3344,18 +3346,59 @@ print(json.dumps({
     .map_err(|e| format!("Помилка фонового потоку: {}", e))?
 }
 
+#[cfg(target_os = "linux")]
+fn ensure_linux_window_interactive(window: &tauri::WebviewWindow) {
+    use gtk::prelude::*;
+    let _ = window.set_ignore_cursor_events(false);
+    let _ = window.set_always_on_top(true);
+    let _ = window.set_visible_on_all_workspaces(true);
+    if let Ok(gtk_win) = window.gtk_window() {
+        gtk_win.set_sensitive(true);
+        gtk_win.set_accept_focus(true);
+        gtk_win.input_shape_combine_region(None);
+        gtk_win.set_keep_above(true);
+        gtk_win.stick();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_always_on_top(true);
-                let _ = window.set_visible_on_all_workspaces(true);
+                // У Mutter (GNOME Wayland + XWayland) негайний виклик _NET_WM_STATE_ABOVE до завершення
+                // прив'язки wl_surface викликає збій meta_window_set_stack_position_no_sync (stack_position == -1),
+                // через що вікно рендериться, але стає неклікабельним (події миші проходять крізь нього).
+                // Тому застосовуємо always-on-top, sticky та скидання input_shape вже після мапінгу вікна.
+                #[cfg(target_os = "linux")]
+                {
+                    for delay_ms in [350_u64, 1200_u64, 3000_u64] {
+                        let w_delayed = window.clone();
+                        gtk::glib::timeout_add_local_once(
+                            Duration::from_millis(delay_ms),
+                            move || {
+                                ensure_linux_window_interactive(&w_delayed);
+                            },
+                        );
+                    }
+                }
+
+                #[cfg(not(target_os = "linux"))]
+                {
+                    let _ = window.set_ignore_cursor_events(false);
+                    let _ = window.set_always_on_top(true);
+                    let _ = window.set_visible_on_all_workspaces(true);
+                }
 
                 // Забезпечуємо, щоб вікно маскота завжди залишалося поверх усіх інших програм
+                let startup_instant = std::time::Instant::now();
                 let w = window.clone();
                 window.on_window_event(move |event| {
+                    if startup_instant.elapsed() < Duration::from_millis(1200) {
+                        return;
+                    }
                     if let tauri::WindowEvent::Focused(_) = event {
+                        let _ = w.set_ignore_cursor_events(false);
                         let _ = w.set_always_on_top(true);
                     }
                 });
@@ -3364,6 +3407,9 @@ pub fn run() {
             // Фоновий планувальник нагадувань і таймерів
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
+                // Чекаємо завершення ініціалізації вікна та WebView перед перевіркою пропущених нагадувань
+                std::thread::sleep(Duration::from_secs(2));
+
                 // Перевірка пропущених нагадувань при старті
                 {
                     let mut reminders = read_reminders_sync();
@@ -3476,6 +3522,8 @@ pub fn run() {
                             } else {
                                 let _ = window.show();
                                 let _ = window.set_focus();
+                                #[cfg(target_os = "linux")]
+                                ensure_linux_window_interactive(&window);
                             }
                         }
                     }

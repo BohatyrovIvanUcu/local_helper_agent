@@ -560,9 +560,14 @@ export default function App() {
     };
   }, []);
 
-  // При старті гарантуємо стан вікна поверх усіх вікон
+  // При старті гарантуємо стан вікна поверх усіх вікон та активну область кліку (після мапінгу XWayland)
   useEffect(() => {
-    getCurrentWindow().setAlwaysOnTop(true).catch(() => {});
+    const id = window.setTimeout(() => {
+      const win = getCurrentWindow();
+      win.setIgnoreCursorEvents(false).catch(() => {});
+      win.setAlwaysOnTop(true).catch(() => {});
+    }, 450);
+    return () => window.clearTimeout(id);
   }, []);
 
   // Очищення таймерів та запису при розмонтуванні

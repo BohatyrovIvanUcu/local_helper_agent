@@ -60,7 +60,7 @@ export const obsidianTool: ToolSpec<ObsidianToolArgs> = {
             "Необов'язковий точний час нагадування (ISO або відносний, наприклад '18:00', 'завтра 09:00').",
         },
       },
-      required: ["filename", "content", "as_todo"],
+      required: ["content"],
     },
   },
   promptRule:
@@ -71,7 +71,12 @@ export const obsidianTool: ToolSpec<ObsidianToolArgs> = {
     if (!content) {
       return { ok: false, error: "Поле 'content' не може бути порожнім." };
     }
-    const asTodo = Boolean(raw.as_todo ?? raw.is_todo ?? false);
+    const asTodo =
+      raw.as_todo !== undefined
+        ? Boolean(raw.as_todo)
+        : raw.is_todo !== undefined
+        ? Boolean(raw.is_todo)
+        : true;
 
     let filename =
       typeof raw.filename === "string" && raw.filename.trim()

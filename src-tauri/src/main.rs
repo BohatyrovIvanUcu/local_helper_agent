@@ -289,12 +289,27 @@ fn main() {
 
     #[cfg(target_os = "linux")]
     {
-        // У GNOME на Wayland стандартний протокол xdg-shell блокує always-on-top для клієнтських вікон.
-        // GDK_BACKEND=x11 перемикає вікно на XWayland, де _NET_WM_STATE_ABOVE гарантовано тримає
-        // маскота поверх навіть повноекранних/максимізованих вікон (VS Code, браузерів тощо).
-        if std::env::var("GDK_BACKEND").is_err() {
-            std::env::set_var("GDK_BACKEND", "x11");
+        // Завершуємо попередній завислий або дубльований процес маскота (якщо він є),
+        // щоб уникнути накладання вікон та блокування WebKit-кешу.
+        let my_pid = std::process::id().to_string();
+        if let Ok(output) = std::process::Command::new("pgrep")
+            .args(["-x", "local-helper-ai"])
+            .output()
+        {
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                let pid = line.trim();
+                if !pid.is_empty() && pid != my_pid {
+                    let _ = std::process::Command::new("kill")
+                        .args(["-9", pid])
+                        .status();
+                }
+            }
         }
+
+        // У GNOME на Wayland сесія або IDE часто виставляє GDK_BACKEND=wayland в оточенні,
+        // через що вікно без декорацій втрачає позиціонування, always-on-top та клікабельність.
+        // Примусово встановлюємо GDK_BACKEND=x11 (XWayland).
+        std::env::set_var("GDK_BACKEND", "x11");
     }
 
     local_helper_ai_lib::run();
