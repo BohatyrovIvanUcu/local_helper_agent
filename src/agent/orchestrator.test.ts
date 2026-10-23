@@ -29,6 +29,12 @@ describe("runAgentTurn", () => {
       stripToolExecutionNotice("Звичайний текст без дужок"),
       "Звичайний текст без дужок"
     );
+    assert.equal(
+      stripToolExecutionNotice(
+        '<untrusted_web_content source="https://example.com">\nКонтент сторінки\n</untrusted_web_content>'
+      ),
+      "Контент сторінки"
+    );
   });
 
   it("handles simple text response without tool calls", async () => {

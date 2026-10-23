@@ -3302,6 +3302,40 @@ except Exception:
     clean = re.sub(r'<[^>]+>', ' ', clean)
     clean_text = re.sub(r'\s+', ' ', clean).strip()
 
+is_clipboard_fallback = False
+if len(clean_text) < 75:
+    clip_text = ''
+    clip_cmds = []
+    if sys.platform == 'darwin':
+        clip_cmds = [['pbpaste']]
+    elif sys.platform.startswith('win'):
+        clip_cmds = [['powershell', '-NoProfile', '-Command', 'Get-Clipboard']]
+    else:
+        clip_cmds = [['wl-paste'], ['xclip', '-o', '-selection', 'clipboard']]
+
+    for c in clip_cmds:
+        try:
+            out = subprocess.check_output(c, stderr=subprocess.DEVNULL, timeout=1).decode('utf-8', errors='ignore').strip()
+            if len(out) > 50 and not out.startswith('http://') and not out.startswith('https://'):
+                clip_text = out
+                break
+        except Exception:
+            pass
+
+    if clip_text:
+        clean_text = clip_text
+        is_clipboard_fallback = True
+
+if len(clean_text) < 75:
+    print(json.dumps({
+        'success': False,
+        'url': url,
+        'title': title or domain,
+        'domain': domain,
+        'error': f"Сторінка ('{title or domain}') є клієнтським веб-додатком (SPA/React) або вимагає авторизації в системі. Її текстовий вміст генерується через JavaScript і недоступний для фонового скачування. Будь ласка, виділіть потрібний текст на сторінці та скопіюйте його (Ctrl+C), або надішліть скриншот."
+    }, ensure_ascii=False))
+    sys.exit(0)
+
 if len(clean_text) > 12000:
     clean_text = clean_text[:12000] + '\n\n[... текст скорочено для саммарі ...]'
 
@@ -3311,7 +3345,8 @@ print(json.dumps({
     'title': title or domain,
     'domain': domain,
     'content': clean_text,
-    'focus': focus_query
+    'focus': focus_query,
+    'clipboard_fallback': is_clipboard_fallback
 }, ensure_ascii=False))
 "#;
 
@@ -3344,8 +3379,12 @@ print(json.dumps({
         let domain = parsed.get("domain").and_then(|v| v.as_str()).unwrap_or("");
         let content = parsed.get("content").and_then(|v| v.as_str()).unwrap_or("");
         let focus_info = parsed.get("focus").and_then(|v| v.as_str());
+        let is_clip = parsed.get("clipboard_fallback").and_then(|v| v.as_bool()).unwrap_or(false);
 
         let mut res = format!("Стаття: \"{}\"\nURL: {}\nДомен: {}\n", title, found_url, domain);
+        if is_clip {
+            res.push_str("Джерело тексту: виділений фрагмент із буфера обміну (SPA сторінка)\n");
+        }
         if let Some(f) = focus_info {
             if !f.is_empty() {
                 res.push_str(&format!("Фокус користувача: {}\n", f));

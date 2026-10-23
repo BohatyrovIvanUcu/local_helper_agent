@@ -32,6 +32,8 @@ export function stripToolExecutionNotice(text: string): string {
   while (/^\[[^\]]+\]\s*/.test(cleaned)) {
     cleaned = cleaned.replace(/^\[[^\]]+\]\s*/, "").trim();
   }
+  // Захист: системні XML-теги пісочниці ніколи не повинні з'являтися у хмарці маскота
+  cleaned = cleaned.replace(/<\/?untrusted_web_content[^>]*>/gi, "").trim();
   return cleaned;
 }
 
@@ -231,13 +233,16 @@ export async function runAgentTurn(options: RunTurnOptions): Promise<TurnResult>
 
     if (iteration > 0 && lastToolSummary) {
       // Для повторних кроків (генерація персонажної відповіді після виконання інструментів):
-      // якщо Gemini затримується довше 4.5 с, повертаємо готовий результат виконаного інструменту
-      const fallbackSummary = lastToolSummary;
+      // якщо Gemini затримується довше таймауту, повертаємо готовий результат виконаного інструменту.
+      // Для читання/саммарі вебсторінок даємо достатньо часу (14 с) для якісного аналізу тексту.
+      const isWebSummary = executedToolsLog.includes("summarize_webpage");
+      const fallbackTimeoutMs = isWebSummary ? 14000 : 7000;
+      const fallbackSummary = stripToolExecutionNotice(lastToolSummary);
       let timer: ReturnType<typeof setTimeout> | undefined;
       const timeoutPromise = new Promise<ModelResponse>((resolve) => {
         timer = setTimeout(() => {
           resolve({ text: fallbackSummary });
-        }, 4500);
+        }, fallbackTimeoutMs);
       });
 
       try {

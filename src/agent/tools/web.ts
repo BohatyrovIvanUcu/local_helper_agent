@@ -53,9 +53,15 @@ export const webTool: ToolSpec<SummarizeWebpageArgs> = {
         url: args.url,
         focus: args.focus,
       });
+
+      const titleMatch = res.match(/^Стаття:\s*"([^"]+)"/m);
+      const urlMatch = res.match(/^URL:\s*([^\s]+)/m);
+      const targetLabel = titleMatch?.[1] || urlMatch?.[1] || "веб-сторінки";
+      const cleanSummary = `Зміст веб-сторінки успішно отримано (${targetLabel})`;
+
       return {
         ok: true,
-        summary: res,
+        summary: cleanSummary,
         data: { result: res },
         untrustedContent: true,
         retryable: true,
@@ -65,7 +71,7 @@ export const webTool: ToolSpec<SummarizeWebpageArgs> = {
       return {
         ok: false,
         code: "execution_error",
-        summary: `Помилка отримання сторінки: ${msg}`,
+        summary: msg,
         data: { error: msg },
       };
     }

@@ -306,6 +306,7 @@ export function cleanBubbleText(text: string | null | undefined): string | null 
   while (/^\[[^\]]+\]\s*/.test(cleaned)) {
     cleaned = cleaned.replace(/^\[[^\]]+\]\s*/, "").trim();
   }
+  cleaned = cleaned.replace(/<\/?untrusted_web_content[^>]*>/gi, "").trim();
   return cleaned || null;
 }
 
