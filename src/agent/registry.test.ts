@@ -5,13 +5,14 @@ import { createDefaultToolRegistry } from "./registry.ts";
 describe("ToolRegistry", () => {
   const registry = createDefaultToolRegistry();
 
-  it("registers all 8 core tools", () => {
+  it("registers all 9 core tools", () => {
     const expected = [
       "append_to_obsidian",
       "create_or_update_file",
       "read_file_or_dir",
       "run_cli_command",
       "control_media",
+      "control_display",
       "manage_memory",
       "manage_reminders",
       "summarize_webpage",
@@ -142,10 +143,10 @@ describe("ToolRegistry", () => {
 
   it("generates function declarations and prompt rules for all tools", () => {
     const decls = registry.getFunctionDeclarations();
-    assert.equal(decls.length, 8);
+    assert.equal(decls.length, 9);
 
     const rules = registry.getPromptRules();
-    assert.equal(rules.length, 8);
+    assert.equal(rules.length, 9);
     for (const rule of rules) {
       assert.ok(typeof rule === "string" && rule.length > 5);
     }

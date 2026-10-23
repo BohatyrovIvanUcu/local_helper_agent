@@ -71,6 +71,7 @@ export type WorkingToolName =
   | "read_file_or_dir"
   | "run_cli_command"
   | "control_media"
+  | "control_display"
   | "manage_memory"
   | "manage_reminders"
   | "summarize_webpage";
@@ -87,6 +88,7 @@ export interface AgentMemoryMessage {
   role: "user" | "model";
   text: string;
   timestamp: string;
+  tools_used?: string[];
 }
 
 export interface AgentMemory {

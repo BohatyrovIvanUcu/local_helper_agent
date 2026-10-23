@@ -37,87 +37,272 @@ export function stripToolExecutionNotice(text: string): string {
   return cleaned;
 }
 
+export function stripConversationalNoise(text: string): string {
+  // Колапс емоційно розтягнутих літер: "офффни" -> "офни", "стоооп" -> "стоп", "врууубай" -> "врубай"
+  const collapsed = text.replace(/([\p{L}])\1{2,}/giu, "$1");
+  const noisePattern =
+    /(?:^|[^\p{L}\p{N}])(?:будь\s*ласка|будь-ласка|пж|пліз|please|сер|шеф|бро|друг|маскот|давай|ану|швидко|вже|ну|типу|можеш|можна|міг\s*би|хотілося\s*б|до\s*біса|к\s*бісу|нафіг|блін|нахрін|чорт)(?=[^\p{L}\p{N}]|$)/giu;
+  let res = collapsed;
+  while (noisePattern.test(res)) {
+    res = res.replace(noisePattern, " ");
+  }
+  return res.replace(/\s+/g, " ").trim();
+}
+
 export function detectDirectMediaCommand(
   prompt: string
 ): { action: string; query?: string | null } | null {
-  const clean = prompt.trim().toLowerCase().replace(/[!.?,;]+$/g, "").trim();
+  const raw = prompt.trim().toLowerCase().replace(/[!.?,;]+$/g, "").trim();
+  // Очищення від типових розмовних часток та звертань ("сер", "будь ласка", "пж", "шеф", "маскот" тощо)
+  const clean = stripConversationalNoise(raw);
 
+  // 1. Пауза / зупинка / вимкнення музики або вимога тиші
   if (
-    [
-      "пауза",
-      "pause",
-      "стоп",
-      "stop",
-      "зупини",
-      "зупинити",
-      "постав на паузу",
-      "паузу",
-      "на паузу",
-      "зупини музику",
-      "stop music",
-    ].includes(clean)
+    /^(?:пауза|pause|stop|стоп|паузу|на\s+паузу|зупини|стоп\s+музика|зупинити|офни|офф|off|вимкни|виключи|вируби|потуши|затуши|погаси|заглуши|приглуши)$/iu.test(
+      clean
+    ) ||
+    // Дія паузи з музикою: (потушити/вимкнути/виключити/вирубити/зупинити/заглушити/приглушити/офнути/поставити на паузу) + (музику/трек/пісню/плеєр)
+    /(?:потуш\p{L}*|затуш\p{L}*|погас\p{L}*|вимкн\p{L}*|виключ\p{L}*|вируб\p{L}*|заглуш\p{L}*|приглуш\p{L}*|зупин\p{L}*|стоп\p{L}*|оф\p{L}*|пауз\p{L}*|pause|stop|off)\s+(?:музик\p{L}*|трек\p{L}*|пісн\p{L}*|плеєр\p{L}*)/iu.test(
+      clean
+    ) ||
+    // Музику на паузу / музику вимкни / музику потуши / музику офни
+    /(?:музик\p{L}*|трек\p{L}*|пісн\p{L}*)\s+(?:на\s+)?(?:пауз\p{L}*|стоп\p{L}*|оф\p{L}*|вимкн\p{L}*|виключ\p{L}*|вируб\p{L}*|потуш\p{L}*|затуш\p{L}*|погас\p{L}*|зупин\p{L}*)/iu.test(
+      clean
+    ) ||
+    // Потреба в тиші: (треба|хочу|зроби|дай|організуй)\s+(тиші/тишу/тишину)
+    /(?:треба|хочу|зроби|дай|організуй)\s+(?:тиш\p{L}*)/iu.test(clean)
   ) {
     return { action: "pause" };
   }
 
+  // 2. Відтворення / запуск музики
   if (
-    [
-      "resume",
-      "продовжи",
-      "продовжити",
-      "продовжуй",
-      "грай",
-      "грати",
-      "play",
-      "плей",
-      "віднови",
-      "відновити",
-      "старт",
-      "продовжи музику",
-      "продовжити музику",
-      "грай далі",
-    ].includes(clean)
+    /^(?:play|плей|грай|віднови|відновити|продовжи|продовжити|продовжуй|resume|старт|start|музику|музика|музичка|музичко)$/iu.test(
+      clean
+    ) ||
+    /(?:включ\p{L}*|увімкн\p{L}*|запуст\p{L}*|вруб\p{L}*|постав\p{L}*|грай\p{L}*|продовж\p{L}*|віднов\p{L}*|дай|підкин\p{L}*|хочу)\s+(?:музик\p{L}*|трек\p{L}*|пісн\p{L}*|плейлист\p{L}*|щось послухати)/iu.test(
+      clean
+    ) ||
+    /(?:музик\p{L}*|трек\p{L}*|пісн\p{L}*)\s+(?:включ\p{L}*|увімкн\p{L}*|запуст\p{L}*|вруб\p{L}*|постав\p{L}*|грай\p{L}*|віднов\p{L}*|продовж\p{L}*|дай)/iu.test(
+      clean
+    )
   ) {
     return { action: "play" };
   }
 
+  // 2.1 Улюблені треки / плейлист лайків: "мої лайки", "включи те що я люблю слухати", "включи мої треки", "лайкнуті"
   if (
-    [
-      "наступний",
-      "наступний трек",
-      "наступна",
-      "наступна пісня",
-      "наступну",
-      "next",
-      "next track",
-      "скіп",
-      "skip",
-      "далі",
-      "переключи",
-      "перемкни",
-      "включи наступний",
-      "включи наступну",
-    ].includes(clean)
+    /(?:лайк\p{L}*|улюблен\p{L}*|те\s+що\s+я\s+люблю|мої\s+треки|мої\s+пісні|моя\s+музика|що\s+я\s+слухаю)/iu.test(
+      clean
+    )
+  ) {
+    return { action: "play", query: "liked" };
+  }
+
+  // 2.2 Запуск конкретної пісні: "включи пісню <назва>", "увімкни трек <назва>", "play <назва>"
+  const playQueryMatch =
+    clean.match(
+      /^(?:включи|увімкни|запусти|вруби|врубай|постав|play|дай|підкинь)\s+(?:пісню|трек|музику|виконавця|альбом|радіо)\s+(.+)$/i
+    ) || clean.match(/^play\s+(.+)$/i);
+  if (playQueryMatch) {
+    const q = playQueryMatch[1].trim();
+    if (
+      q &&
+      ![
+        "музику",
+        "музика",
+        "музики",
+        "музичко",
+        "щось",
+        "плей",
+        "play",
+      ].includes(q)
+    ) {
+      return { action: "play", query: q };
+    }
+  }
+
+  // 3. Наступний трек (Next / Skip)
+  if (
+    /^(?:next|next\s+track|next\s+song|скіп|skip|skip\s+track|skip\s+song|далі|наступн\p{L}*|переключ\p{L}*|перемкн\p{L}*|пропусти|перегорни|скип\p{L}*)$/iu.test(
+      clean
+    ) ||
+    /(?:наступн\p{L}*|інш\p{L}*)\s+(?:трек\p{L}*|пісн\p{L}*|музик\p{L}*)/iu.test(
+      clean
+    ) ||
+    /(?:включ\p{L}*|увімкн\p{L}*|постав\p{L}*|дай|давай|переключ\p{L}*|перемкн\p{L}*|скіпн\p{L}*|скипн\p{L}*)\s+(?:наступн\p{L}*|інш\p{L}*|далі)/iu.test(
+      clean
+    ) ||
+    /(?:переключ\p{L}*|перемкн\p{L}*|скіпн\p{L}*|скипн\p{L}*)\s+(?:трек\p{L}*|пісн\p{L}*)/iu.test(
+      clean
+    ) ||
+    /^(?:next|skip)\s+(?:track|song|music)$/iu.test(clean)
   ) {
     return { action: "next" };
   }
 
+  // 4. Попередній трек (Prev / Back)
   if (
-    [
-      "попередній",
-      "попередній трек",
-      "попередня",
-      "попередня пісня",
-      "попередню",
-      "prev",
-      "previous",
-      "previous track",
-      "назад",
-      "включи попередній",
-      "включи попередню",
-    ].includes(clean)
+    /^(?:prev|previous|previous\s+track|previous\s+song|prev\s+track|prev\s+song|назад|попередн\p{L}*)$/iu.test(
+      clean
+    ) ||
+    /(?:попередн\p{L}*|минул\p{L}*)\s+(?:трек\p{L}*|пісн\p{L}*|музик\p{L}*)/iu.test(
+      clean
+    ) ||
+    /(?:включ\p{L}*|увімкн\p{L}*|постав\p{L}*|поверни|верни|переключ\p{L}*|перемкн\p{L}*)\s+(?:попередн\p{L}*|назад)/iu.test(
+      clean
+    ) ||
+    /^(?:prev|previous)\s+(?:track|song|music)$/iu.test(clean)
   ) {
     return { action: "prev" };
+  }
+
+  // 5. Встановлення точного відсотка гучності (наприклад: "гучність 0", "звук 50%", "зроби звук 30%")
+  const volPctMatch =
+    clean.match(/(?:гучн\S*|звук\S*|volume)\s*(?:на|до|у|в)?\s*(\d{1,3})\s*%?/iu) ||
+    clean.match(/(?:постав|зроби|встанови|зменш|збільш)\s*(?:гучн\S*|звук\S*)?(?:\s+(?:на|до))?\s+(\d{1,3})\s*%?/iu);
+  if (volPctMatch) {
+    const val = parseInt(volPctMatch[1], 10);
+    if (!isNaN(val) && val >= 0 && val <= 100) {
+      return { action: "set_volume", query: String(val) };
+    }
+  }
+
+  // 6. Зменшення гучності (тихіше)
+  if (
+    /(?:тихіш|тиішх|притиш|quieter|volume\s+down)/iu.test(clean) ||
+    /(?:зменш|знизь|приглуш)\s+(?:звук|гучн)/iu.test(clean)
+  ) {
+    return { action: "volume_down" };
+  }
+
+  // 7. Збільшення гучності (голосніше / гучніше)
+  if (
+    /(?:голосніш|гучніш|louder|volume\s+up)/iu.test(clean) ||
+    /(?:додай|підніми|підвищ|збільш)\s+(?:звук|гучн)/iu.test(clean)
+  ) {
+    return { action: "volume_up" };
+  }
+
+  // 8. Вимкнення звуку (Mute)
+  if (
+    /(?:вимкн\p{L}*|виключ\p{L}*|заглуш\p{L}*)\s+звук/iu.test(clean) ||
+    /^(?:без\s+звуку|мут|mute|повна\s+тиша)$/iu.test(clean)
+  ) {
+    return { action: "mute" };
+  }
+
+  // 9. Увімкнення звуку (Unmute)
+  if (
+    /(?:увімкн\p{L}*|включ\p{L}*|поверн\p{L}*|верн\p{L}*)\s+звук/iu.test(clean) ||
+    /^(?:анмут|unmute)$/iu.test(clean)
+  ) {
+    return { action: "unmute" };
+  }
+
+  // 10. Запит поточної гучності
+  if (
+    [
+      "яка гучність",
+      "яка зараз гучність",
+      "поточна гучність",
+      "рівень звуку",
+      "рівень гучності",
+    ].includes(clean)
+  ) {
+    return { action: "get_volume" };
+  }
+
+  return null;
+}
+
+export interface DirectDisplayCommand {
+  action: string;
+  value?: number | null;
+  enabled?: boolean | null;
+  temperature?: number | null;
+}
+
+export function detectDirectDisplayCommand(prompt: string): DirectDisplayCommand | null {
+  const raw = prompt.trim().toLowerCase().replace(/[!.?,;]+$/g, "").trim();
+  const clean = stripConversationalNoise(raw);
+
+  // 1. Нічний режим / тепле світло
+  if (
+    /^(?:night\s+light|night\s+light\s+on)$/iu.test(clean) ||
+    /(?:включ\p{L}*|увімкн\p{L}*|постав\p{L}*|зроби|дай)\s+(?:нічн\p{L}*|тепл\p{L}*|жовт\p{L}*)\s+(?:режим\p{L}*|світл\p{L}*|екран\p{L}*)/iu.test(
+      clean
+    ) ||
+    /^(?:нічний\s+режим|нічне\s+світло|тепле\s+світло|теплий\s+режим|теплий\s+екран|жовтий\s+екран|жовте\s+світло)$/iu.test(
+      clean
+    )
+  ) {
+    return { action: "enable_night_light" };
+  }
+
+  if (
+    /^(?:night\s+light\s+off)$/iu.test(clean) ||
+    /(?:вимкн\p{L}*|виключ\p{L}*|погас\p{L}*|потуш\p{L}*|скин\p{L}*)\s+(?:нічн\p{L}*|тепл\p{L}*|жовт\p{L}*)\s+(?:режим\p{L}*|світл\p{L}*|екран\p{L}*)/iu.test(
+      clean
+    ) ||
+    /^(?:холодний\s+екран|холодне\s+світло|денне\s+світло|звичайне\s+світло|нейтральний\s+екран)$/iu.test(
+      clean
+    )
+  ) {
+    return { action: "disable_night_light" };
+  }
+
+  if (
+    /(?:перемкн\p{L}*|переключ\p{L}*|тогл)\s+(?:нічн\p{L}*|тепл\p{L}*)/iu.test(clean)
+  ) {
+    return { action: "toggle_night_light" };
+  }
+
+  if (
+    /(?:який\s+режим|статус\s+нічн\p{L}*|чи\s+(?:увімкнен|включен)\p{L}*\s+нічн\p{L}*)/iu.test(clean)
+  ) {
+    return { action: "get_night_light" };
+  }
+
+  // 2. Точний відсоток яскравості
+  const pctMatch =
+    clean.match(/(?:яскрав\S*|чскрав\S*|екран\S*|brightness)\s*(?:на|до|у|в)?\s*(\d{1,3})\s*%?/iu) ||
+    clean.match(/(?:постав|зроби|встанови|зменш|збільш|викрути)\s*(?:яскрав\S*|чскрав\S*|екран\S*)?\s*(?:на|до)?\s*(\d{1,3})\s*%?/iu);
+  if (pctMatch) {
+    const val = parseInt(pctMatch[1], 10);
+    if (!isNaN(val) && val >= 0 && val <= 100) {
+      return { action: "set_brightness", value: Math.max(5, val) };
+    }
+  }
+
+  // 3. Збільшення / зменшення яскравості
+  if (
+    /^(?:яскравіше|світліше|brighter)$/iu.test(clean) ||
+    /(?:додай|підніми|підвищ|збільш)\s+(?:яскрав\S*|чскрав\S*|світл\S*)/iu.test(clean) ||
+    /(?:зроби\s+)?(?:екран\p{L}*\s+)?(?:яскравіш\p{L}*|світліш\p{L}*)/iu.test(clean)
+  ) {
+    return { action: "increase_brightness", value: 10 };
+  }
+
+  if (
+    /^(?:темніше|dimmer)$/iu.test(clean) ||
+    /(?:зменш|знизь|приглуши?)\s+(?:яскрав\S*|чскрав\S*|світл\S*)/iu.test(clean) ||
+    /(?:зроби\s+)?(?:екран\p{L}*\s+)?(?:темніш\p{L}*|приглуш\p{L}*)/iu.test(clean)
+  ) {
+    return { action: "decrease_brightness", value: 10 };
+  }
+
+  // 4. Запит поточної яскравості
+  if (
+    [
+      "яка яскравість",
+      "яка зараз яскравість",
+      "поточна яскравість",
+      "яскравість екрана",
+      "яка яскравість екрана",
+    ].includes(clean)
+  ) {
+    return { action: "get_brightness" };
   }
 
   return null;
@@ -174,8 +359,10 @@ export async function runAgentTurn(options: RunTurnOptions): Promise<TurnResult>
           await invoke("append_conversation_turn", {
             user_text: userPrompt.trim(),
             model_text: summary,
+            tools_used: [`control_media (${directMedia.action})`],
             userText: userPrompt.trim(),
             modelText: summary,
+            toolsUsed: [`control_media (${directMedia.action})`],
           });
         } catch {
           // ignore memory error
@@ -195,6 +382,46 @@ export async function runAgentTurn(options: RunTurnOptions): Promise<TurnResult>
     }
   }
 
+  // Пряме миттєве виконання команд яскравості та нічного режиму без затримки на LLM (<30 мс)
+  const directDisplay = detectDirectDisplayCommand(userPrompt);
+  if (directDisplay && attachments.length === 0) {
+    callbacks.onStateChange("WORKING", "control_display");
+    try {
+      const summary = await invoke<string>("control_display", {
+        action: directDisplay.action,
+        value: directDisplay.value ?? null,
+        enabled: directDisplay.enabled ?? null,
+        temperature: directDisplay.temperature ?? null,
+      });
+
+      if (userPrompt.trim() && summary) {
+        try {
+          await invoke("append_conversation_turn", {
+            user_text: userPrompt.trim(),
+            model_text: summary,
+            tools_used: [`control_display (${directDisplay.action})`],
+            userText: userPrompt.trim(),
+            modelText: summary,
+            toolsUsed: [`control_display (${directDisplay.action})`],
+          });
+        } catch {
+          // ignore memory error
+        }
+      }
+
+      return {
+        text: summary,
+        executedTools: ["control_display"],
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        text: `Помилка керування дисплеєм: ${msg}`,
+        executedTools: ["control_display"],
+      };
+    }
+  }
+
   const ctx: ToolContext = {
     invoke,
     confirm: callbacks.onConfirmRequest,
@@ -206,6 +433,7 @@ export async function runAgentTurn(options: RunTurnOptions): Promise<TurnResult>
   };
 
   const executedToolsLog: string[] = [];
+  const executedToolsDetails: string[] = [];
 
   // Формуємо початкові contents
   const contents: Array<Record<string, unknown>> = [...conversationHistory];
@@ -310,14 +538,16 @@ export async function runAgentTurn(options: RunTurnOptions): Promise<TurnResult>
       const rawText = textResponse.trim() || response.text?.trim() || "";
       const finalText = stripToolExecutionNotice(rawText);
 
-      // Зберігаємо діалог у пам'ять
+      // Зберігаємо діалог у пам'ять разом зі списком реально виконаних інструментів для прозорого дебагу
       if (userPrompt.trim() && finalText) {
         try {
           await invoke("append_conversation_turn", {
             user_text: userPrompt.trim(),
             model_text: finalText,
+            tools_used: executedToolsDetails,
             userText: userPrompt.trim(),
             modelText: finalText,
+            toolsUsed: executedToolsDetails,
           });
         } catch {
           // Помилка запису пам'яті не блокує видачу відповіді
@@ -481,6 +711,13 @@ export async function runAgentTurn(options: RunTurnOptions): Promise<TurnResult>
       }
 
       executedToolsLog.push(toolSpec.name);
+      const actionParam =
+        validation.args &&
+        typeof validation.args === "object" &&
+        "action" in validation.args
+          ? ` (${String((validation.args as Record<string, unknown>).action)})`
+          : "";
+      executedToolsDetails.push(`${toolSpec.name}${actionParam}`);
       lastToolSummary = outcome.summary;
 
       if (outcome.untrustedContent) {

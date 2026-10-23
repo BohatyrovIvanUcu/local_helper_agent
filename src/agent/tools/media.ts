@@ -15,36 +15,52 @@ export const mediaTool: ToolSpec<MediaToolArgs> = {
   declaration: {
     name: "control_media",
     description:
-      "Керує відтворенням музики та мультимедіа на комп'ютері. Може натискати Play/Pause на активному плеєрі (включно з YouTube Music у браузері чи Spotify) або знаходити та вмикати конкретний трек чи жанр одразу з відтворенням.",
+      "Керує відтворенням музики та системною гучністю звуку на комп'ютері. Може натискати Play/Pause на активному плеєрі, знаходити треки, а також регулювати системну гучність (голосніше, тихіше, встановити 0-100%, mute, unmute).",
     parameters: {
       type: Type.OBJECT,
       properties: {
         action: {
           type: Type.STRING,
           description:
-            "Дія з відтворенням: 'play' (увімкнути або продовжити), 'pause' (поставити на паузу), 'next' (наступний трек), 'prev' (попередній трек).",
+            "Дія з відтворенням або звуком: 'play', 'pause', 'next', 'prev', 'volume_up', 'volume_down', 'set_volume', 'mute', 'unmute', 'get_volume'.",
         },
         query: {
           type: Type.STRING,
           description:
-            "Необов'язкова назва пісні, виконавця чи жанру (наприклад: 'Did It First', 'Скрябін', 'lofi beats'). Залиш null, якщо користувач просто сказав 'включи музику'.",
+            "Необов'язкова назва пісні, виконавця, жанру або відсоток гучності (наприклад: '0', '50', 'Скрябін', 'lofi beats').",
         },
       },
       required: ["action"],
     },
   },
   promptRule:
-    "control_media: керування музичним плеєром або запуск треків на YouTube Music (play/pause/resume/next/prev). Коли користувач каже 'resume', 'play', 'пауза', 'продовжи', 'грай' — ЗАВЖДИ викликай control_media з action: 'play' або 'pause'.",
+    "control_media: керування музичним плеєром та системною гучністю звуку (play, pause, next, prev, volume_up, volume_down, set_volume, mute, unmute). Будь-який запит на запуск музики ('дай музики', 'включи музику', 'play'), зупинку ('пауза', 'офни музику', 'стоп'), перемикання треків ('наступний', 'next', 'next song', 'skip', 'попередній', 'prev') чи зміну гучності — ЗАВЖДИ викликай control_media.",
   validateArgs: (raw) => {
     const rawAction = raw.action ?? "play";
     const action = typeof rawAction === "string" ? rawAction.trim() : "play";
     const rawQuery = raw.query;
     let query =
-      typeof rawQuery === "string" && rawQuery.trim() ? rawQuery.trim() : null;
+      typeof rawQuery === "string" && rawQuery.trim()
+        ? rawQuery.trim()
+        : typeof rawQuery === "number"
+        ? String(rawQuery)
+        : null;
 
-    if (query) {
+    if (query && action !== "set_volume") {
       const lower = query.toLowerCase();
       if (
+        lower.includes("лайк") ||
+        lower.includes("улюблен") ||
+        lower.includes("люблю") ||
+        lower.includes("мої треки") ||
+        lower.includes("мої пісні") ||
+        lower.includes("моя музика") ||
+        lower.includes("мій плейлист") ||
+        lower === "liked" ||
+        lower === "favorites"
+      ) {
+        query = "liked";
+      } else if (
         [
           "музика",
           "музику",

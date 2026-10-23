@@ -71,6 +71,7 @@ const TOOL_LABELS: Record<WorkingToolName, string> = {
   read_file_or_dir: "Вивчаю креслення й файли...",
   run_cli_command: "Виконую команду...",
   control_media: "Керую музикою 🎵...",
+  control_display: "Налаштовую екран 🔆...",
   manage_memory: "Запам'ятовую контекст 🧠...",
   manage_reminders: "Налаштовую нагадування ⏰...",
   summarize_webpage: "Аналізую веб-сторінку 🌐...",

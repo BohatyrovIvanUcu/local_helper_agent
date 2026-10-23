@@ -171,6 +171,15 @@ const VOLUME_CONTROL_COMMANDS = new Set([
   "nircmd.exe",
 ]);
 
+const DISPLAY_CONTROL_COMMANDS = new Set([
+  "brightnessctl",
+  "light",
+  "xrandr",
+  "gammastep",
+  "redshift",
+  "wlsunset",
+]);
+
 function isSensitivePath(path: string): boolean {
   const normalized = path.replace(/\\/g, "/");
   return (
@@ -342,6 +351,31 @@ export function evaluatePolicy(
 
       // Керування гучністю та аудіосистемою (pactl, wpctl, amixer, pamixer тощо)
       if (VOLUME_CONTROL_COMMANDS.has(baseBin)) {
+        continue;
+      }
+
+      // Керування яскравістю та нічним режимом (brightnessctl, light, xrandr, gammastep тощо)
+      if (DISPLAY_CONTROL_COMMANDS.has(baseBin)) {
+        continue;
+      }
+
+      // gsettings для налаштувань кольору та дисплея
+      if (
+        baseBin === "gsettings" &&
+        (sub.includes("plugins.color") ||
+          sub.includes("night-light") ||
+          sub.includes("brightness"))
+      ) {
+        continue;
+      }
+
+      // busctl / gdbus для Mutter DisplayConfig або Color/Power
+      if (
+        (baseBin === "busctl" || baseBin === "gdbus") &&
+        (sub.includes("DisplayConfig") ||
+          sub.includes("SettingsDaemon.Color") ||
+          sub.includes("SettingsDaemon.Power"))
+      ) {
         continue;
       }
 

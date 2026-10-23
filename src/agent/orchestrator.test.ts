@@ -4,6 +4,7 @@ import {
   runAgentTurn,
   stripToolExecutionNotice,
   detectDirectMediaCommand,
+  detectDirectDisplayCommand,
   type ModelClient,
 } from "./orchestrator.ts";
 import { createDefaultToolRegistry } from "./registry.ts";
@@ -117,7 +118,7 @@ describe("runAgentTurn", () => {
       modelClient: fakeClient,
       modelName: "gemini-3.5-flash-lite",
       systemInstruction: "System prompt",
-      userPrompt: "Увімкни музику",
+      userPrompt: "Знайди та увімкни мені трек для фокусу",
       toolRegistry: registry,
       invoke: async <T>(cmd: string): Promise<T> => {
         invokedCommands.push(cmd);
@@ -253,8 +254,55 @@ describe("runAgentTurn", () => {
     assert.deepEqual(detectDirectMediaCommand("pause."), { action: "pause" });
     assert.deepEqual(detectDirectMediaCommand("наступний трек"), { action: "next" });
     assert.deepEqual(detectDirectMediaCommand("next"), { action: "next" });
+    assert.deepEqual(detectDirectMediaCommand("next song"), { action: "next" });
+    assert.deepEqual(detectDirectMediaCommand("skip song"), { action: "next" });
+    assert.deepEqual(detectDirectMediaCommand("скіпни трек"), { action: "next" });
+    assert.deepEqual(detectDirectMediaCommand("перемкни пісню"), { action: "next" });
     assert.deepEqual(detectDirectMediaCommand("попередній трек"), { action: "prev" });
     assert.deepEqual(detectDirectMediaCommand("prev"), { action: "prev" });
+    assert.deepEqual(detectDirectMediaCommand("prev song"), { action: "prev" });
+    assert.deepEqual(detectDirectMediaCommand("тихіше"), { action: "volume_down" });
+    assert.deepEqual(detectDirectMediaCommand("тиішхе"), { action: "volume_down" });
+    assert.deepEqual(detectDirectMediaCommand("зроби гучніше"), { action: "volume_up" });
+    assert.deepEqual(detectDirectMediaCommand("зробигучнітсь на 0"), {
+      action: "set_volume",
+      query: "0",
+    });
+    assert.deepEqual(detectDirectMediaCommand("зроби гучніість на 0"), {
+      action: "set_volume",
+      query: "0",
+    });
+    assert.deepEqual(detectDirectMediaCommand("гучність 50%"), {
+      action: "set_volume",
+      query: "50",
+    });
+    assert.deepEqual(detectDirectMediaCommand("вимкни звук"), { action: "mute" });
+    assert.deepEqual(detectDirectMediaCommand("музику сер"), { action: "play" });
+    assert.deepEqual(detectDirectMediaCommand("включи музику будь ласка"), { action: "play" });
+    assert.deepEqual(detectDirectMediaCommand("пж дай музики"), { action: "play" });
+    assert.deepEqual(detectDirectMediaCommand("хочу музику"), { action: "play" });
+    assert.deepEqual(detectDirectMediaCommand("офни музику пж"), { action: "pause" });
+    assert.deepEqual(detectDirectMediaCommand("можеш потушити музику треба тиші"), { action: "pause" });
+    assert.deepEqual(detectDirectMediaCommand("потуши музику"), { action: "pause" });
+    assert.deepEqual(detectDirectMediaCommand("треба тиші"), { action: "pause" });
+    assert.deepEqual(detectDirectMediaCommand("хочу тиші"), { action: "pause" });
+    assert.deepEqual(detectDirectMediaCommand("офффни музику до біса"), { action: "pause" });
+    assert.deepEqual(detectDirectMediaCommand("потуши музику нафіг"), { action: "pause" });
+    assert.deepEqual(detectDirectMediaCommand("стоооп"), { action: "pause" });
+    assert.deepEqual(detectDirectMediaCommand("врууубай музику блін"), { action: "play" });
+    assert.deepEqual(detectDirectMediaCommand("включи те що я люблю слухати"), {
+      action: "play",
+      query: "liked",
+    });
+    assert.deepEqual(detectDirectMediaCommand("включи мої треки"), {
+      action: "play",
+      query: "liked",
+    });
+    assert.deepEqual(detectDirectMediaCommand("мої лайкнуті"), {
+      action: "play",
+      query: "liked",
+    });
+    assert.equal(detectDirectMediaCommand("запусти скрипт"), null);
     assert.equal(detectDirectMediaCommand("що таке квантова фізика?"), null);
   });
 
@@ -288,5 +336,89 @@ describe("runAgentTurn", () => {
     assert.deepEqual(res.executedTools, ["control_media"]);
     assert.equal(invokedCommands[0].cmd, "control_media");
     assert.deepEqual(invokedCommands[0].args, { action: "next", query: null });
+  });
+
+  it("detectDirectDisplayCommand recognizes display and night light keywords", () => {
+    assert.deepEqual(detectDirectDisplayCommand("увімкни нічний режим"), {
+      action: "enable_night_light",
+    });
+    assert.deepEqual(detectDirectDisplayCommand("тепле світло"), {
+      action: "enable_night_light",
+    });
+    assert.deepEqual(detectDirectDisplayCommand("вимкни нічний режим"), {
+      action: "disable_night_light",
+    });
+    assert.deepEqual(detectDirectDisplayCommand("зроби яскравіше"), {
+      action: "increase_brightness",
+      value: 10,
+    });
+    assert.deepEqual(detectDirectDisplayCommand("темніше"), {
+      action: "decrease_brightness",
+      value: 10,
+    });
+    assert.deepEqual(detectDirectDisplayCommand("яскравість 50%"), {
+      action: "set_brightness",
+      value: 50,
+    });
+    assert.deepEqual(detectDirectDisplayCommand("зменш яскравість до 30%"), {
+      action: "set_brightness",
+      value: 30,
+    });
+    assert.deepEqual(detectDirectDisplayCommand("зроби теплий екран"), {
+      action: "enable_night_light",
+    });
+    assert.deepEqual(detectDirectDisplayCommand("холодний екран"), {
+      action: "disable_night_light",
+    });
+    assert.deepEqual(detectDirectDisplayCommand("чскравіть на 70"), {
+      action: "set_brightness",
+      value: 70,
+    });
+    assert.deepEqual(detectDirectDisplayCommand("зроби екран темніше"), {
+      action: "decrease_brightness",
+      value: 10,
+    });
+    assert.deepEqual(detectDirectDisplayCommand("зроби екран світліше"), {
+      action: "increase_brightness",
+      value: 10,
+    });
+    assert.equal(detectDirectDisplayCommand("розкажи анекдот"), null);
+  });
+
+  it("executes direct display command instantly without calling LLM", async () => {
+    let llmCalled = false;
+    const fakeClient: ModelClient = {
+      generateContent: async () => {
+        llmCalled = true;
+        throw new Error("LLM should not be called for direct display commands!");
+      },
+    };
+
+    const invokedCommands: Array<{ cmd: string; args: unknown }> = [];
+    const res = await runAgentTurn({
+      modelClient: fakeClient,
+      modelName: "gemini-3.5-flash-lite",
+      systemInstruction: "System prompt",
+      userPrompt: "зменш яскравість до 30%",
+      toolRegistry: registry,
+      invoke: async <T>(cmd: string, args: unknown): Promise<T> => {
+        invokedCommands.push({ cmd, args });
+        return "Встановив яскравість на 30% 🔆" as unknown as T;
+      },
+      callbacks: {
+        onStateChange: () => {},
+      },
+    });
+
+    assert.equal(llmCalled, false);
+    assert.equal(res.text, "Встановив яскравість на 30% 🔆");
+    assert.deepEqual(res.executedTools, ["control_display"]);
+    assert.equal(invokedCommands[0].cmd, "control_display");
+    assert.deepEqual(invokedCommands[0].args, {
+      action: "set_brightness",
+      value: 30,
+      enabled: null,
+      temperature: null,
+    });
   });
 });

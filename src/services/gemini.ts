@@ -67,7 +67,7 @@ export function formatGeminiError(err: unknown): string {
     lower.includes("permission_denied") ||
     (lower.includes("not found") && lower.includes("key"))
   ) {
-    return "🔑 Проблема з API-ключем Gemini.\nБудь ласка, перевір або онови ключ у терміналі:\naddkey <ТВІЙ_КЛЮЧ>";
+    return "🔑 Проблема з API-ключем Gemini.\nБудь ласка, перевір або онови ключ у терміналі:\nlocal-helper-ai addkey <ТВІЙ_КЛЮЧ>";
   }
 
   // 4. Мережеві помилки
@@ -148,7 +148,7 @@ export async function askMascot(
 
   if (!apiKey) {
     throw new Error(
-      "🔑 Не знайдено Gemini API ключ!\nБудь ласка, введіть у терміналі:\naddkey <ВАШ_КЛЮЧ>\nабо: local-helper-ai addkey <ВАШ_КЛЮЧ>"
+      "🔑 Не знайдено Gemini API ключ!\nБудь ласка, введіть у терміналі:\nlocal-helper-ai addkey <ВАШ_КЛЮЧ>"
     );
   }
 
@@ -206,18 +206,50 @@ export async function askMascot(
       : null,
   });
 
-  const conversationHistory = memory.recent_messages.map((msg) => {
-    // Очищаємо застарілі префікси на кшталт [Виконано: ...], щоб модель не копіювала їх у відповідь
-    const cleanText =
-      msg.role === "model"
-        ? msg.text.replace(/^\[Виконано:[^\]]+\]\s*/i, "").trim()
-        : msg.text;
+  const conversationHistory = memory.recent_messages
+    .filter((msg) => {
+      // Захист від галюцинацій: якщо стара репліка маскота стверджує про дію з музикою/звуком,
+      // але tools_used порожній — виключаємо її з історії, щоб модель не копіювала відповіді текстом
+      if (
+        msg.role === "model" &&
+        (!msg.tools_used || msg.tools_used.length === 0)
+      ) {
+        const lower = msg.text.toLowerCase();
+        if (
+          lower.includes("музик") ||
+          lower.includes("пауз") ||
+          lower.includes("вирубаю") ||
+          lower.includes("вимикаю") ||
+          lower.includes("запускаю") ||
+          lower.includes("тиша в ефірі") ||
+          lower.includes("наступн") ||
+          lower.includes("попередн") ||
+          lower.includes("яскравіст") ||
+          lower.includes("нічний режим") ||
+          lower.includes("тепле світло") ||
+          lower.includes("теплий екран") ||
+          lower.includes("нагадуван") ||
+          lower.includes("таймер") ||
+          lower.includes("записав у todo") ||
+          lower.includes("додав у obsidian")
+        ) {
+          return false;
+        }
+      }
+      return true;
+    })
+    .map((msg) => {
+      // Очищаємо застарілі префікси на кшталт [Виконано: ...], щоб модель не копіювала їх у відповідь
+      const cleanText =
+        msg.role === "model"
+          ? msg.text.replace(/^\[Виконано:[^\]]+\]\s*/i, "").trim()
+          : msg.text;
 
-    return {
-      role: msg.role === "model" ? "model" : "user",
-      parts: [{ text: cleanText }],
-    };
-  });
+      return {
+        role: msg.role === "model" ? "model" : "user",
+        parts: [{ text: cleanText }],
+      };
+    });
 
   const result = await runAgentTurn({
     modelClient,

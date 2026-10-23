@@ -6,6 +6,7 @@ import { mediaTool } from "./media.ts";
 import { memoryTool } from "./memory.ts";
 import { remindersTool } from "./reminders.ts";
 import { webTool } from "./web.ts";
+import { displayTool } from "./display.ts";
 
 export {
   obsidianTool,
@@ -16,6 +17,7 @@ export {
   memoryTool,
   remindersTool,
   webTool,
+  displayTool,
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -28,5 +30,6 @@ export const ALL_BUILTIN_TOOLS: ToolSpec<any>[] = [
   memoryTool,
   remindersTool,
   webTool,
+  displayTool,
 ];
 

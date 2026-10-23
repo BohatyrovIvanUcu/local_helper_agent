@@ -151,6 +151,33 @@ describe("SafetyPolicy", () => {
     );
   });
 
+  it("allows safe display and night light control commands without confirmation", () => {
+    assert.equal(
+      evaluatePolicy("run_cli_command", { command: "brightnessctl set 50%" }, dummyCtx).decision,
+      "allow"
+    );
+    assert.equal(
+      evaluatePolicy("run_cli_command", { command: "light -S 70" }, dummyCtx).decision,
+      "allow"
+    );
+    assert.equal(
+      evaluatePolicy("run_cli_command", { command: "gsettings set org.gnome.settings-daemon.plugins.color night-light-enabled true" }, dummyCtx).decision,
+      "allow"
+    );
+    assert.equal(
+      evaluatePolicy("run_cli_command", { command: "gsettings get org.gnome.settings-daemon.plugins.color night-light-temperature" }, dummyCtx).decision,
+      "allow"
+    );
+    assert.equal(
+      evaluatePolicy("run_cli_command", { command: "busctl --user get-property org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfig org.gnome.Mutter.DisplayConfig Backlight" }, dummyCtx).decision,
+      "allow"
+    );
+    assert.equal(
+      evaluatePolicy("control_display", { action: "set_brightness", value: 40 }, dummyCtx).decision,
+      "allow"
+    );
+  });
+
   it("allows creating and editing safe text files (.txt, .md, .log, .json, .csv) anywhere non-sensitive", () => {
     assert.equal(
       evaluatePolicy("create_or_update_file", { filepath: "test.txt" }, dummyCtx).decision,
