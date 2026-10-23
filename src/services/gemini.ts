@@ -126,9 +126,19 @@ export async function askMascot(
   callbacks: AskMascotCallbacks,
   attachments: MediaAttachment[] = []
 ): Promise<string> {
-  const [config, memory] = await Promise.all([
+  interface ActiveWorkspaceRaw {
+    workspace_path?: string | null;
+    active_file?: string | null;
+    source?: string;
+  }
+
+  const [config, memory, activeWs] = await Promise.all([
     getAppConfig(),
     getAgentMemory(),
+    invoke<ActiveWorkspaceRaw>("get_active_workspace").catch((err) => {
+      console.warn("Failed to get active workspace:", err);
+      return null;
+    }),
   ]);
 
   const apiKey =
@@ -181,19 +191,6 @@ export async function askMascot(
       : hasImage
       ? "Проаналізуй це зображення. Якщо на ньому задачі, дедлайни чи ідеї — додай їх у відповідну секцію Obsidian, інакше коротко поясни суть."
       : "");
-
-  interface ActiveWorkspaceRaw {
-    workspace_path?: string | null;
-    active_file?: string | null;
-    source?: string;
-  }
-
-  let activeWs: ActiveWorkspaceRaw | null = null;
-  try {
-    activeWs = await invoke<ActiveWorkspaceRaw>("get_active_workspace");
-  } catch (err) {
-    console.warn("Failed to get active workspace:", err);
-  }
 
   const systemInstruction = composeSystemPrompt({
     vaultPath: config.obsidian_vault_path,

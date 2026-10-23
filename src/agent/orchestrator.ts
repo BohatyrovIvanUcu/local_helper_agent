@@ -35,6 +35,92 @@ export function stripToolExecutionNotice(text: string): string {
   return cleaned;
 }
 
+export function detectDirectMediaCommand(
+  prompt: string
+): { action: string; query?: string | null } | null {
+  const clean = prompt.trim().toLowerCase().replace(/[!.?,;]+$/g, "").trim();
+
+  if (
+    [
+      "пауза",
+      "pause",
+      "стоп",
+      "stop",
+      "зупини",
+      "зупинити",
+      "постав на паузу",
+      "паузу",
+      "на паузу",
+      "зупини музику",
+      "stop music",
+    ].includes(clean)
+  ) {
+    return { action: "pause" };
+  }
+
+  if (
+    [
+      "resume",
+      "продовжи",
+      "продовжити",
+      "продовжуй",
+      "грай",
+      "грати",
+      "play",
+      "плей",
+      "віднови",
+      "відновити",
+      "старт",
+      "продовжи музику",
+      "продовжити музику",
+      "грай далі",
+    ].includes(clean)
+  ) {
+    return { action: "play" };
+  }
+
+  if (
+    [
+      "наступний",
+      "наступний трек",
+      "наступна",
+      "наступна пісня",
+      "наступну",
+      "next",
+      "next track",
+      "скіп",
+      "skip",
+      "далі",
+      "переключи",
+      "перемкни",
+      "включи наступний",
+      "включи наступну",
+    ].includes(clean)
+  ) {
+    return { action: "next" };
+  }
+
+  if (
+    [
+      "попередній",
+      "попередній трек",
+      "попередня",
+      "попередня пісня",
+      "попередню",
+      "prev",
+      "previous",
+      "previous track",
+      "назад",
+      "включи попередній",
+      "включи попередню",
+    ].includes(clean)
+  ) {
+    return { action: "prev" };
+  }
+
+  return null;
+}
+
 export interface RunTurnOptions {
   modelClient: ModelClient;
   modelName: string;
@@ -71,6 +157,42 @@ export async function runAgentTurn(options: RunTurnOptions): Promise<TurnResult>
     maxIterations = 5,
   } = options;
 
+  // Пряме миттєве виконання медіа-команд (resume, pause, next, prev тощо) без затримки на LLM
+  const directMedia = detectDirectMediaCommand(userPrompt);
+  if (directMedia && attachments.length === 0) {
+    callbacks.onStateChange("WORKING", "control_media");
+    try {
+      const summary = await invoke<string>("control_media", {
+        action: directMedia.action,
+        query: directMedia.query ?? null,
+      });
+
+      if (userPrompt.trim() && summary) {
+        try {
+          await invoke("append_conversation_turn", {
+            user_text: userPrompt.trim(),
+            model_text: summary,
+            userText: userPrompt.trim(),
+            modelText: summary,
+          });
+        } catch {
+          // ignore memory error
+        }
+      }
+
+      return {
+        text: summary,
+        executedTools: ["control_media"],
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        text: `Помилка керування медіа: ${msg}`,
+        executedTools: ["control_media"],
+      };
+    }
+  }
+
   const ctx: ToolContext = {
     invoke,
     confirm: callbacks.onConfirmRequest,
@@ -102,19 +224,53 @@ export async function runAgentTurn(options: RunTurnOptions): Promise<TurnResult>
   callbacks.onStateChange("THINKING");
 
   const functionDeclarations = toolRegistry.getFunctionDeclarations();
+  let lastToolSummary: string | undefined;
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
-    const response = await modelClient.generateContent({
-      model: modelName,
-      contents,
-      config: {
-        systemInstruction: {
-          parts: [{ text: systemInstruction }],
+    let response: ModelResponse;
+
+    if (iteration > 0 && lastToolSummary) {
+      // Для повторних кроків (генерація персонажної відповіді після виконання інструментів):
+      // якщо Gemini затримується довше 4.5 с, повертаємо готовий результат виконаного інструменту
+      const fallbackSummary = lastToolSummary;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<ModelResponse>((resolve) => {
+        timer = setTimeout(() => {
+          resolve({ text: fallbackSummary });
+        }, 4500);
+      });
+
+      try {
+        response = await Promise.race([
+          modelClient.generateContent({
+            model: modelName,
+            contents,
+            config: {
+              systemInstruction: {
+                parts: [{ text: systemInstruction }],
+              },
+              tools: [{ functionDeclarations }],
+              temperature: 0.2,
+            },
+          }),
+          timeoutPromise,
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    } else {
+      response = await modelClient.generateContent({
+        model: modelName,
+        contents,
+        config: {
+          systemInstruction: {
+            parts: [{ text: systemInstruction }],
+          },
+          tools: [{ functionDeclarations }],
+          temperature: 0.2,
         },
-        tools: [{ functionDeclarations }],
-        temperature: 0.2,
-      },
-    });
+      });
+    }
 
     const candidate = response.candidates?.[0]?.content as
       | { parts?: Array<Record<string, unknown>> }
@@ -320,6 +476,7 @@ export async function runAgentTurn(options: RunTurnOptions): Promise<TurnResult>
       }
 
       executedToolsLog.push(toolSpec.name);
+      lastToolSummary = outcome.summary;
 
       if (outcome.untrustedContent) {
         ctx.tainted = true;
@@ -345,7 +502,7 @@ export async function runAgentTurn(options: RunTurnOptions): Promise<TurnResult>
       parts: responseParts,
     });
 
-    callbacks.onStateChange("THINKING");
+    callbacks.onStateChange("THINKING", undefined);
   }
 
   return {

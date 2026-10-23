@@ -1,6 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { runAgentTurn, stripToolExecutionNotice, type ModelClient } from "./orchestrator.ts";
+import {
+  runAgentTurn,
+  stripToolExecutionNotice,
+  detectDirectMediaCommand,
+  type ModelClient,
+} from "./orchestrator.ts";
 import { createDefaultToolRegistry } from "./registry.ts";
 import type { ConfirmationRequest } from "./types.ts";
 
@@ -232,5 +237,50 @@ describe("runAgentTurn", () => {
     assert.equal(confirmCalled, true);
     assert.equal(callCount, 2);
     assert.equal(res.text, "Зрозумів, команду скасовано.");
+  });
+
+  it("detectDirectMediaCommand recognizes media control keywords", () => {
+    assert.deepEqual(detectDirectMediaCommand("resume"), { action: "play" });
+    assert.deepEqual(detectDirectMediaCommand("play!"), { action: "play" });
+    assert.deepEqual(detectDirectMediaCommand("продовжи"), { action: "play" });
+    assert.deepEqual(detectDirectMediaCommand("пауза"), { action: "pause" });
+    assert.deepEqual(detectDirectMediaCommand("pause."), { action: "pause" });
+    assert.deepEqual(detectDirectMediaCommand("наступний трек"), { action: "next" });
+    assert.deepEqual(detectDirectMediaCommand("next"), { action: "next" });
+    assert.deepEqual(detectDirectMediaCommand("попередній трек"), { action: "prev" });
+    assert.deepEqual(detectDirectMediaCommand("prev"), { action: "prev" });
+    assert.equal(detectDirectMediaCommand("що таке квантова фізика?"), null);
+  });
+
+  it("executes direct media command instantly without calling LLM", async () => {
+    let llmCalled = false;
+    const fakeClient: ModelClient = {
+      generateContent: async () => {
+        llmCalled = true;
+        throw new Error("LLM should not be called for direct media commands!");
+      },
+    };
+
+    const invokedCommands: Array<{ cmd: string; args: unknown }> = [];
+    const res = await runAgentTurn({
+      modelClient: fakeClient,
+      modelName: "gemini-3.5-flash-lite",
+      systemInstruction: "System prompt",
+      userPrompt: "наступний трек",
+      toolRegistry: registry,
+      invoke: async <T>(cmd: string, args: unknown): Promise<T> => {
+        invokedCommands.push({ cmd, args });
+        return "Увімкнено наступний трек ⏭️" as unknown as T;
+      },
+      callbacks: {
+        onStateChange: () => {},
+      },
+    });
+
+    assert.equal(llmCalled, false);
+    assert.equal(res.text, "Увімкнено наступний трек ⏭️");
+    assert.deepEqual(res.executedTools, ["control_media"]);
+    assert.equal(invokedCommands[0].cmd, "control_media");
+    assert.deepEqual(invokedCommands[0].args, { action: "next", query: null });
   });
 });

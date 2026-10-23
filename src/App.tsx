@@ -415,8 +415,8 @@ export default function App() {
           const monitorBottom = monitor.position.y + monitor.size.height;
           const monitorRight = monitor.position.x + monitor.size.width;
 
-          // Ліміт по нижньому краю (висота вікна 240px або 440px + безпечний відступ 16px)
-          const windowHeight = isExpanded ? 440 : 240;
+          // Ліміт по нижньому краю (висота вікна 258px або 440px + безпечний відступ 16px)
+          const windowHeight = isExpanded ? 440 : 258;
           const bottomSafeMargin = 16;
           const maxAllowedY = monitorBottom - windowHeight - bottomSafeMargin;
           const minAllowedY = monitor.position.y + 16;
@@ -867,7 +867,7 @@ export default function App() {
         {
           onStateChange: (nextState, toolName) => {
             setMascotState(nextState);
-            setActiveTool(toolName);
+            setActiveTool(nextState === "THINKING" ? undefined : toolName);
           },
           onConfirmRequest: (request) =>
             new Promise<boolean>((resolve) => {
@@ -1001,8 +1001,8 @@ export default function App() {
       }}
       onDrop={handleDrop}
       className={`relative flex ${
-        isExpanded ? "h-[440px] w-[380px]" : "h-[240px] w-[280px]"
-      } flex-col items-center justify-start bg-transparent px-3 pt-3 select-none transition-all duration-200`}
+        isExpanded ? "h-[440px] w-[380px]" : "h-[258px] w-[280px]"
+      } flex-col items-center justify-start bg-transparent px-3 pt-6 select-none transition-all duration-200`}
     >
       {/* Прихований input для кнопки «Скріпка» */}
       <input
@@ -1052,7 +1052,7 @@ export default function App() {
         >
           {/* М'яке світіння під час активних станів */}
           <div
-            className={`pointer-events-none absolute inset-1 rounded-full blur-xl transition-opacity duration-300 ${
+            className={`pointer-events-none absolute inset-x-2.5 top-3.5 bottom-1 rounded-full blur-xl transition-opacity duration-300 ${
               photoPop
                 ? "bg-amber-400/50 opacity-100"
                 : isRecording

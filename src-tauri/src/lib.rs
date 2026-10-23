@@ -1320,11 +1320,31 @@ async fn read_clipboard_image(
     }
 }
 
+#[cfg(target_os = "linux")]
+fn run_python_mpris_cmd(py_code: &str) -> Option<std::process::ExitStatus> {
+    if Path::new("/usr/bin/aa-exec").exists() {
+        if let Ok(status) = Command::new("/usr/bin/aa-exec")
+            .args(["-p", "unconfined", "python3", "-c", py_code])
+            .stdin(Stdio::null())
+            .status()
+        {
+            if status.success() {
+                return Some(status);
+            }
+        }
+    }
+    Command::new("python3")
+        .args(["-c", py_code])
+        .stdin(Stdio::null())
+        .status()
+        .ok()
+}
+
 fn resume_media_player() -> bool {
     #[cfg(target_os = "linux")]
     {
         let py_code = r#"
-import sys, time, dbus
+import sys, dbus
 try:
     bus = dbus.SessionBus()
     players = [s for s in bus.list_names() if s.startswith('org.mpris.MediaPlayer2.')]
@@ -1333,37 +1353,24 @@ try:
     resumed = False
     for p in players:
         try:
-            player_obj = bus.get_object(p, '/org/mpris/MediaPlayer2')
+            player_obj = bus.get_object(p, '/org/mpris/MediaPlayer2', introspect=False)
             iface = dbus.Interface(player_obj, 'org.mpris.MediaPlayer2.Player')
-            props = dbus.Interface(player_obj, 'org.freedesktop.DBus.Properties')
-            try:
-                status = str(props.Get('org.mpris.MediaPlayer2.Player', 'PlaybackStatus'))
-                if status == 'Playing':
-                    resumed = True
-                    continue
-            except Exception:
-                pass
             try:
                 iface.Play()
+                resumed = True
             except Exception:
                 try:
                     iface.PlayPause()
+                    resumed = True
                 except Exception:
                     pass
-            time.sleep(0.25)
-            try:
-                status_after = str(props.Get('org.mpris.MediaPlayer2.Player', 'PlaybackStatus'))
-                if status_after == 'Playing':
-                    resumed = True
-            except Exception:
-                pass
         except Exception:
             pass
     sys.exit(0 if resumed else 1)
 except Exception:
     sys.exit(1)
 "#;
-        if let Ok(status) = Command::new("python3").args(["-c", py_code]).status() {
+        if let Some(status) = run_python_mpris_cmd(py_code) {
             if status.success() {
                 return true;
             }
@@ -1526,12 +1533,6 @@ except Exception:
 fn pause_media_player() -> bool {
     #[cfg(target_os = "linux")]
     {
-        if let Ok(status) = Command::new("playerctl").arg("pause").status() {
-            if status.success() {
-                return true;
-            }
-        }
-
         let py_code = r#"
 import sys, dbus
 try:
@@ -1542,7 +1543,7 @@ try:
     paused = False
     for p in players:
         try:
-            player_obj = bus.get_object(p, '/org/mpris/MediaPlayer2')
+            player_obj = bus.get_object(p, '/org/mpris/MediaPlayer2', introspect=False)
             iface = dbus.Interface(player_obj, 'org.mpris.MediaPlayer2.Player')
             try:
                 iface.Pause()
@@ -1559,7 +1560,7 @@ try:
 except Exception:
     sys.exit(1)
 "#;
-        if let Ok(status) = Command::new("python3").args(["-c", py_code]).status() {
+        if let Some(status) = run_python_mpris_cmd(py_code) {
             if status.success() {
                 return true;
             }
@@ -1593,12 +1594,6 @@ except Exception:
 fn next_media_player() -> bool {
     #[cfg(target_os = "linux")]
     {
-        if let Ok(status) = Command::new("playerctl").arg("next").status() {
-            if status.success() {
-                return true;
-            }
-        }
-
         let py_code = r#"
 import sys, dbus
 try:
@@ -1606,16 +1601,23 @@ try:
     players = [s for s in bus.list_names() if s.startswith('org.mpris.MediaPlayer2.')]
     if not players:
         sys.exit(1)
+    success = False
     for p in players:
         try:
-            bus.get_object(p, '/org/mpris/MediaPlayer2').Next(dbus_interface='org.mpris.MediaPlayer2.Player')
+            player_obj = bus.get_object(p, '/org/mpris/MediaPlayer2', introspect=False)
+            iface = dbus.Interface(player_obj, 'org.mpris.MediaPlayer2.Player')
+            try:
+                iface.Next()
+                success = True
+            except Exception:
+                pass
         except Exception:
             pass
-    sys.exit(0)
+    sys.exit(0 if success else 1)
 except Exception:
     sys.exit(1)
 "#;
-        if let Ok(status) = Command::new("python3").args(["-c", py_code]).status() {
+        if let Some(status) = run_python_mpris_cmd(py_code) {
             if status.success() {
                 return true;
             }
@@ -1649,12 +1651,6 @@ except Exception:
 fn prev_media_player() -> bool {
     #[cfg(target_os = "linux")]
     {
-        if let Ok(status) = Command::new("playerctl").arg("previous").status() {
-            if status.success() {
-                return true;
-            }
-        }
-
         let py_code = r#"
 import sys, dbus
 try:
@@ -1662,16 +1658,23 @@ try:
     players = [s for s in bus.list_names() if s.startswith('org.mpris.MediaPlayer2.')]
     if not players:
         sys.exit(1)
+    success = False
     for p in players:
         try:
-            bus.get_object(p, '/org/mpris/MediaPlayer2').Previous(dbus_interface='org.mpris.MediaPlayer2.Player')
+            player_obj = bus.get_object(p, '/org/mpris/MediaPlayer2', introspect=False)
+            iface = dbus.Interface(player_obj, 'org.mpris.MediaPlayer2.Player')
+            try:
+                iface.Previous()
+                success = True
+            except Exception:
+                pass
         except Exception:
             pass
-    sys.exit(0)
+    sys.exit(0 if success else 1)
 except Exception:
     sys.exit(1)
 "#;
-        if let Ok(status) = Command::new("python3").args(["-c", py_code]).status() {
+        if let Some(status) = run_python_mpris_cmd(py_code) {
             if status.success() {
                 return true;
             }
@@ -1876,20 +1879,53 @@ print("URL:" + play_url)
     Ok(reply_msg)
 }
 
+fn is_generic_music_query(q: &str) -> bool {
+    let lower = q.trim().to_lowercase();
+    matches!(
+        lower.as_str(),
+        "" | "liked"
+            | "liked_music"
+            | "лайки"
+            | "мої лайки"
+            | "улюблені"
+            | "улюблена музика"
+            | "мій плейлист"
+            | "моя музика"
+            | "музика"
+            | "музику"
+            | "музики"
+            | "музичко"
+            | "music"
+            | "track"
+            | "трек"
+            | "пісня"
+            | "пісню"
+            | "song"
+            | "плей"
+            | "play"
+    ) || lower.contains("сподобалась")
+}
+
 /// Керує відтворенням медіа: натискає Play/Pause на активному плеєрі або запускає прямий трек.
 #[tauri::command]
-async fn control_media(action: String, query: Option<String>) -> Result<String, String> {
+async fn control_media(
+    app: tauri::AppHandle,
+    action: String,
+    query: Option<String>,
+) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let action_clean = action.trim().to_lowercase();
         let query_clean = query.as_deref().map(str::trim).filter(|s| !s.is_empty());
 
         if let Some(q) = query_clean {
-            // Якщо запитано відтворення улюблених треків, спочатку пробуємо відновити вже відкритий плеєр на паузі
+            let is_generic = is_generic_music_query(q);
+            // Якщо запитано відтворення улюблених треків або загальну музику, спочатку пробуємо відновити вже відкритий плеєр на паузі
             if (action_clean == "play" || action_clean == "open_and_play" || action_clean == "play_query")
-                && (q == "liked_music" || q == "liked")
+                && is_generic
             {
                 if resume_media_player() {
                     LAST_KNOWN_MUSIC_PLAYING.store(true, Ordering::Relaxed);
+                    let _ = app.emit("media-playback-changed", true);
                     return Ok("Продовжую відтворення музики ▶️".to_string());
                 }
             }
@@ -1898,6 +1934,7 @@ async fn control_media(action: String, query: Option<String>) -> Result<String, 
                 let res = open_and_play_query(q);
                 if res.is_ok() {
                     LAST_KNOWN_MUSIC_PLAYING.store(true, Ordering::Relaxed);
+                    let _ = app.emit("media-playback-changed", true);
                 }
                 return res;
             }
@@ -1906,6 +1943,7 @@ async fn control_media(action: String, query: Option<String>) -> Result<String, 
         if action_clean == "pause" {
             let handled = pause_media_player();
             LAST_KNOWN_MUSIC_PLAYING.store(false, Ordering::Relaxed);
+            let _ = app.emit("media-playback-changed", false);
             if handled {
                 return Ok("Музику поставлено на паузу ⏸️".to_string());
             } else {
@@ -1916,6 +1954,7 @@ async fn control_media(action: String, query: Option<String>) -> Result<String, 
         if action_clean == "next" {
             let handled = next_media_player();
             LAST_KNOWN_MUSIC_PLAYING.store(true, Ordering::Relaxed);
+            let _ = app.emit("media-playback-changed", true);
             if handled {
                 return Ok("Увімкнено наступний трек ⏭️".to_string());
             } else {
@@ -1926,6 +1965,7 @@ async fn control_media(action: String, query: Option<String>) -> Result<String, 
         if action_clean == "prev" || action_clean == "previous" {
             let handled = prev_media_player();
             LAST_KNOWN_MUSIC_PLAYING.store(true, Ordering::Relaxed);
+            let _ = app.emit("media-playback-changed", true);
             if handled {
                 return Ok("Увімкнено попередній трек ⏮️".to_string());
             } else {
@@ -1938,6 +1978,7 @@ async fn control_media(action: String, query: Option<String>) -> Result<String, 
         let resumed = resume_media_player();
         if resumed {
             LAST_KNOWN_MUSIC_PLAYING.store(true, Ordering::Relaxed);
+            let _ = app.emit("media-playback-changed", true);
             return Ok("Продовжую відтворення музики ▶️".to_string());
         }
 
@@ -1945,6 +1986,7 @@ async fn control_media(action: String, query: Option<String>) -> Result<String, 
         let res = open_and_play_query("liked_music");
         if res.is_ok() {
             LAST_KNOWN_MUSIC_PLAYING.store(true, Ordering::Relaxed);
+            let _ = app.emit("media-playback-changed", true);
         }
         res
     })
@@ -1955,57 +1997,31 @@ async fn control_media(action: String, query: Option<String>) -> Result<String, 
 fn check_is_music_playing() -> bool {
     #[cfg(target_os = "linux")]
     {
-        // 1. Спочатку пробуємо легкий playerctl (без важкого спавну інтерпретатора Python)
-        if let Ok(out) = Command::new("playerctl")
-            .arg("status")
-            .stdin(Stdio::null())
-            .output()
-        {
-            let stdout = String::from_utf8_lossy(&out.stdout).to_lowercase();
-            if stdout.contains("playing") {
-                LAST_KNOWN_MUSIC_PLAYING.store(true, Ordering::Relaxed);
-                return true;
-            } else if out.status.success() || stdout.contains("paused") || stdout.contains("stopped") {
-                LAST_KNOWN_MUSIC_PLAYING.store(false, Ordering::Relaxed);
-                return false;
-            } else {
-                let stderr = String::from_utf8_lossy(&out.stderr).to_lowercase();
-                if stderr.contains("no players found") {
-                    LAST_KNOWN_MUSIC_PLAYING.store(false, Ordering::Relaxed);
-                    return false;
-                }
-            }
-        }
-
-        // 2. Fallback через Python DBus, якщо playerctl відсутній
         let py_code = r#"
-import sys
+import sys, dbus
 try:
-    import dbus
     bus = dbus.SessionBus()
+    players = [s for s in bus.list_names() if s.startswith('org.mpris.MediaPlayer2.')]
+    if not players:
+        sys.exit(1)
     found_any = False
-    for p in bus.list_names():
-        if p.startswith('org.mpris.MediaPlayer2.'):
+    for p in players:
+        try:
+            player_obj = bus.get_object(p, '/org/mpris/MediaPlayer2', introspect=False)
+            props = dbus.Interface(player_obj, 'org.freedesktop.DBus.Properties')
+            status = str(props.Get('org.mpris.MediaPlayer2.Player', 'PlaybackStatus'))
             found_any = True
-            try:
-                obj = bus.get_object(p, '/org/mpris/MediaPlayer2')
-                props = dbus.Interface(obj, 'org.freedesktop.DBus.Properties')
-                status = str(props.Get('org.mpris.MediaPlayer2.Player', 'PlaybackStatus', dbus_interface='org.freedesktop.DBus.Properties'))
-                if status.lower() == 'playing':
-                    sys.exit(0)
-            except Exception:
-                pass
+            if status.lower() == 'playing':
+                sys.exit(0)
+        except Exception:
+            pass
     if found_any:
         sys.exit(2)
 except Exception:
     pass
 sys.exit(1)
 "#;
-        if let Ok(status) = Command::new("python3")
-            .args(["-c", py_code])
-            .stdin(Stdio::null())
-            .status()
-        {
+        if let Some(status) = run_python_mpris_cmd(py_code) {
             if status.code() == Some(0) {
                 LAST_KNOWN_MUSIC_PLAYING.store(true, Ordering::Relaxed);
                 return true;
@@ -2621,7 +2637,7 @@ async fn set_window_expanded(app: tauri::AppHandle, expanded: bool) -> Result<()
         let (w, h) = if expanded {
             (380.0, 440.0)
         } else {
-            (280.0, 240.0)
+            (280.0, 258.0)
         };
         let _ = window.set_size(tauri::LogicalSize::new(w, h));
     }

@@ -34,13 +34,35 @@ export const mediaTool: ToolSpec<MediaToolArgs> = {
     },
   },
   promptRule:
-    "control_media: керування музичним плеєром або пошук і запуск треків на YouTube Music чи в браузері (play/pause/next/prev/mute).",
+    "control_media: керування музичним плеєром або запуск треків на YouTube Music (play/pause/resume/next/prev). Коли користувач каже 'resume', 'play', 'пауза', 'продовжи', 'грай' — ЗАВЖДИ викликай control_media з action: 'play' або 'pause'.",
   validateArgs: (raw) => {
     const rawAction = raw.action ?? "play";
     const action = typeof rawAction === "string" ? rawAction.trim() : "play";
     const rawQuery = raw.query;
-    const query =
+    let query =
       typeof rawQuery === "string" && rawQuery.trim() ? rawQuery.trim() : null;
+
+    if (query) {
+      const lower = query.toLowerCase();
+      if (
+        [
+          "музика",
+          "музику",
+          "музики",
+          "музичко",
+          "music",
+          "track",
+          "трек",
+          "пісня",
+          "пісню",
+          "song",
+          "play",
+          "плей",
+        ].includes(lower)
+      ) {
+        query = null;
+      }
+    }
 
     return {
       ok: true,
