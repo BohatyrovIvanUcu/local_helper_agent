@@ -1086,24 +1086,24 @@ export default function App() {
       {/* Нижня зона: Хмаринка відповіді АБО Рядок вводу (з'являються прямо під маскотом) */}
       <div className="relative mt-1 flex w-full flex-col items-center justify-start">
         {/* Хмаринка повідомлення/статусу */}
-        <AnimatePresence mode="wait">
+        <AnimatePresence>
           {displayedBubble && !isInputOpen && (
             <motion.div
-              key={statusBanner ? `status-${mascotState}-${activeTool}` : "reply"}
-              initial={{ opacity: 0, y: -6, scale: 0.94 }}
+              key="mascot-speech-bubble"
+              initial={{ opacity: 0, y: -6, scale: 0.96 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -4, scale: 0.94 }}
-              transition={{ duration: 0.18, ease: "easeOut" }}
+              exit={{ opacity: 0, y: -4, scale: 0.96 }}
+              transition={{ duration: 0.15, ease: "easeOut" }}
               className={`relative ${
                 isExpanded ? "max-h-[295px]" : "max-h-[105px]"
-              } w-full overflow-y-auto rounded-2xl border px-3 py-2 text-xs leading-relaxed shadow-lg backdrop-blur-md transition-all duration-200 ${
+              } w-full overflow-y-auto overflow-x-hidden rounded-2xl border px-3 py-2 text-xs leading-relaxed shadow-xl transition-[max-height] duration-150 ease-out ${
                 mascotState === "ERROR"
                   ? isOverloadNotice
-                    ? "border-amber-400/80 bg-zinc-900/95 text-amber-100 ring-1 ring-amber-400/50 shadow-md shadow-amber-500/20"
-                    : "border-red-500/60 bg-zinc-900/95 text-red-200"
+                    ? "border-amber-400/80 bg-zinc-900/98 text-amber-100 ring-1 ring-amber-400/50 shadow-md shadow-amber-500/20"
+                    : "border-red-500/60 bg-zinc-900/98 text-red-200"
                   : displayedBubble?.startsWith("🔔")
-                  ? "border-amber-400 bg-zinc-900/95 text-amber-100 ring-1 ring-amber-400/50 shadow-md shadow-amber-500/20"
-                  : "border-zinc-700/60 bg-zinc-900/90 text-zinc-100"
+                  ? "border-amber-400 bg-zinc-900/98 text-amber-100 ring-1 ring-amber-400/50 shadow-md shadow-amber-500/20"
+                  : "border-zinc-700/70 bg-zinc-900/98 text-zinc-100"
               }`}
             >
               {/* Хвостик хмаринки зверху по центру, що вказує на маскота */}
@@ -1111,11 +1111,11 @@ export default function App() {
                 className={`absolute -top-1.5 left-1/2 h-3 w-3 -translate-x-1/2 rotate-45 border-l border-t ${
                   mascotState === "ERROR"
                     ? isOverloadNotice
-                      ? "border-amber-400/80 bg-zinc-900/95"
-                      : "border-red-500/60 bg-zinc-900/95"
+                      ? "border-amber-400/80 bg-zinc-900/98"
+                      : "border-red-500/60 bg-zinc-900/98"
                     : displayedBubble?.startsWith("🔔")
-                    ? "border-amber-400 bg-zinc-900/95"
-                    : "border-zinc-700/60 bg-zinc-900/90"
+                    ? "border-amber-400 bg-zinc-900/98"
+                    : "border-zinc-700/70 bg-zinc-900/98"
                 }`}
               />
 
@@ -1226,7 +1226,7 @@ export default function App() {
               transition={{ duration: 0.18, ease: "easeOut" }}
               onSubmit={handleSubmit}
               onPaste={(e) => void handlePasteEvent(e)}
-              className="mt-0.5 flex w-full flex-col gap-1.5 rounded-xl border border-zinc-700/60 bg-zinc-900/90 px-2.5 py-2 shadow-lg backdrop-blur-md"
+              className="mt-0.5 flex w-full flex-col gap-1.5 rounded-xl border border-zinc-700/70 bg-zinc-900/98 px-2.5 py-2 shadow-xl"
             >
               {/* Прев'ю прикріпленого зображення з анімацією та статусом */}
               <AnimatePresence>

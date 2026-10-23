@@ -13,3 +13,18 @@ body,
   -webkit-user-select: none;
 }
 
+/* Акуратний мінімалістичний скролбар для хмаринки */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(161, 161, 170, 0.3);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(245, 158, 11, 0.5);
+}
+
