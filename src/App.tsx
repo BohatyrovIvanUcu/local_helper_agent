@@ -30,6 +30,7 @@ import {
   type WorkingToolName,
   type ConfirmationRequest,
 } from "./services/gemini";
+import { extractImageFromDataTransfer } from "./utils/dragDrop";
 
 // Синтетичний приємний дзвіночок нагадування через Web Audio API
 function playNotificationChime() {
@@ -608,6 +609,7 @@ export default function App() {
   };
 
   const pasteLockRef = useRef<number>(0);
+  const dropLockRef = useRef<number>(0);
 
   const applyClipboardImage = (res: ClipboardImagePayload) => {
     setAttachedImage({
@@ -775,6 +777,76 @@ export default function App() {
       window.removeEventListener("keydown", onKeyDown, true);
     };
   }, [isInputOpen, isExpanded, bubbleText, isBusy]);
+
+  // Обробка системного перетягування файлів через Tauri v2 (наприклад з Nautilus / стільниці)
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let isMounted = true;
+
+    getCurrentWindow()
+      .onDragDropEvent(async (event) => {
+        if (!isMounted) return;
+        if (event.payload.type === "enter" || event.payload.type === "over") {
+          setIsDraggingFile(true);
+        } else if (event.payload.type === "leave") {
+          setIsDraggingFile(false);
+        } else if (event.payload.type === "drop") {
+          setIsDraggingFile(false);
+          const now = Date.now();
+          if (now - dropLockRef.current < 450) return;
+
+          const paths = event.payload.paths;
+          if (paths && paths.length > 0) {
+            for (const path of paths) {
+              if (/\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(path)) {
+                dropLockRef.current = now;
+                try {
+                  const base64Data = await invoke<string>("read_image_base64", {
+                    filepath: path,
+                  });
+                  const ext = path.split(".").pop()?.toLowerCase();
+                  const mime =
+                    ext === "jpg" || ext === "jpeg"
+                      ? "image/jpeg"
+                      : ext === "webp"
+                      ? "image/webp"
+                      : "image/png";
+                  applyClipboardImage({
+                    mime_type: mime,
+                    base64_data: base64Data,
+                    name: path.split("/").pop() || "image.png",
+                  });
+                  break;
+                } catch {
+                  setBubbleText("Не вдалося відкрити файл зображення.");
+                }
+              }
+            }
+          }
+        }
+      })
+      .then((fn) => {
+        if (!isMounted) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch(() => {});
+
+    const preventWindowDrop = (e: DragEvent) => {
+      e.preventDefault();
+    };
+    window.addEventListener("dragover", preventWindowDrop, false);
+    window.addEventListener("drop", preventWindowDrop, false);
+
+    return () => {
+      isMounted = false;
+      if (unlisten) unlisten();
+      window.removeEventListener("dragover", preventWindowDrop, false);
+      window.removeEventListener("drop", preventWindowDrop, false);
+    };
+  }, []);
 
   // Обробка перетягування вікна vs короткого кліку по маскоту
   const handleMascotMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -973,12 +1045,69 @@ export default function App() {
     e.target.value = "";
   };
 
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+  const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setIsDraggingFile(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) {
-      void attachFile(file);
+
+    const now = Date.now();
+    if (now - dropLockRef.current < 450) return;
+
+    const extracted = extractImageFromDataTransfer(e.dataTransfer);
+    if (!extracted) {
+      return;
+    }
+
+    dropLockRef.current = now;
+
+    if (extracted.type === "file") {
+      await attachFile(extracted.file);
+    } else if (extracted.type === "data_url") {
+      applyClipboardImage({
+        mime_type: extracted.mimeType,
+        base64_data: extracted.base64Data,
+        name: "dropped_image.png",
+      });
+    } else if (extracted.type === "file_path") {
+      try {
+        const base64Data = await invoke<string>("read_image_base64", {
+          filepath: extracted.path,
+        });
+        const ext = extracted.path.split(".").pop()?.toLowerCase();
+        const mime =
+          ext === "jpg" || ext === "jpeg"
+            ? "image/jpeg"
+            : ext === "webp"
+            ? "image/webp"
+            : "image/png";
+        applyClipboardImage({
+          mime_type: mime,
+          base64_data: base64Data,
+          name: extracted.path.split("/").pop() || "image.png",
+        });
+      } catch {
+        setBubbleText("Не вдалося відкрити файл зображення.");
+      }
+    } else if (extracted.type === "web_url") {
+      setBubbleText("Завантажую фото... ⏳");
+      try {
+        const res = await invoke<ClipboardImagePayload>("fetch_image_from_url", {
+          url: extracted.url,
+        });
+        applyClipboardImage(res);
+      } catch {
+        try {
+          const fetchRes = await fetch(extracted.url, { cache: "no-cache" });
+          if (!fetchRes.ok) throw new Error("Fetch failed");
+          const blob = await fetchRes.blob();
+          if (!blob.type.startsWith("image/")) throw new Error("Not an image");
+          const filename =
+            extracted.url.split("/").pop()?.split("?")[0] || "image.png";
+          const file = new File([blob], filename, { type: blob.type });
+          await attachFile(file);
+        } catch {
+          setBubbleText("Не вдалося завантажити зображення з цього посилання.");
+        }
+      }
     }
   };
 
@@ -993,6 +1122,7 @@ export default function App() {
       }}
       onDragOver={(e) => {
         e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
         setIsDraggingFile(true);
       }}
       onDragLeave={(e) => {
@@ -1001,7 +1131,7 @@ export default function App() {
           setIsDraggingFile(false);
         }
       }}
-      onDrop={handleDrop}
+      onDrop={(e) => void handleDrop(e)}
       className={`relative flex ${
         isExpanded ? "h-[440px] w-[380px]" : "h-[258px] w-[280px]"
       } flex-col items-center justify-start bg-transparent px-3 pt-6 select-none transition-all duration-200`}

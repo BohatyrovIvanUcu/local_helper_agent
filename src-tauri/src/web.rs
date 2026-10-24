@@ -437,3 +437,165 @@ print(json.dumps({
     .map_err(|e| format!("Помилка фонового потоку: {}", e))?
 }
 
+/// Завантажує зображення за вказаним веб-URL та повертає його Base64 вміст і MIME-тип.
+#[tauri::command]
+pub async fn fetch_image_from_url(url: String) -> Result<crate::clipboard::ClipboardImageResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let clean_url = url.trim();
+        if !clean_url.starts_with("http://") && !clean_url.starts_with("https://") {
+            return Err("Некоректний URL: очікується протокол http або https".to_string());
+        }
+
+        // 1. Спроба завантаження через curl
+        let curl_output = Command::new("curl")
+            .args([
+                "-sSL",
+                "--max-time", "12",
+                "-H", "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+                "-H", "Accept: image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                "-w", "\n__MIME__:%{content_type}",
+                clean_url,
+            ])
+            .output();
+
+        let mut data_bytes: Vec<u8> = Vec::new();
+        let mut mime_str = String::new();
+
+        if let Ok(out) = curl_output {
+            if out.status.success() && !out.stdout.is_empty() {
+                let stdout = out.stdout;
+                let marker = b"\n__MIME__:";
+                if let Some(pos) = stdout.windows(marker.len()).rposition(|w| w == marker) {
+                    data_bytes = stdout[..pos].to_vec();
+                    mime_str = String::from_utf8_lossy(&stdout[pos + marker.len()..]).trim().to_string();
+                } else {
+                    data_bytes = stdout;
+                }
+            }
+        }
+
+        // 2. Фолбек через Python urllib, якщо curl повернув порожні дані
+        if data_bytes.is_empty() {
+            let py_downloader = r#"
+import sys, urllib.request, ssl
+
+url = sys.argv[1].strip()
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+
+req = urllib.request.Request(
+    url,
+    headers={
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+    }
+)
+try:
+    with urllib.request.urlopen(req, context=ctx, timeout=10.0) as resp:
+        b = resp.read(15_000_000)
+        ct = resp.headers.get_content_type() or 'image/png'
+        sys.stdout.buffer.write(b)
+        sys.stdout.buffer.write(b'\n__MIME__:' + ct.encode('utf-8'))
+except Exception:
+    sys.exit(1)
+"#;
+            if let Ok(py_out) = Command::new("python3").args(["-c", py_downloader, clean_url]).output() {
+                if py_out.status.success() && !py_out.stdout.is_empty() {
+                    let stdout = py_out.stdout;
+                    let marker = b"\n__MIME__:";
+                    if let Some(pos) = stdout.windows(marker.len()).rposition(|w| w == marker) {
+                        data_bytes = stdout[..pos].to_vec();
+                        mime_str = String::from_utf8_lossy(&stdout[pos + marker.len()..]).trim().to_string();
+                    } else {
+                        data_bytes = stdout;
+                    }
+                }
+            }
+        }
+
+        if data_bytes.is_empty() {
+            return Err("Не вдалося завантажити зображення: ресурс недоступний або порожній".to_string());
+        }
+
+        // 3. Визначення та валідація MIME-типу
+        let detected_mime = if mime_str.starts_with("image/") {
+            mime_str.split(';').next().unwrap_or("image/png").trim().to_string()
+        } else if data_bytes.starts_with(b"\x89PNG") {
+            "image/png".to_string()
+        } else if data_bytes.starts_with(b"\xff\xd8\xff") {
+            "image/jpeg".to_string()
+        } else if data_bytes.starts_with(b"GIF8") {
+            "image/gif".to_string()
+        } else if data_bytes.starts_with(b"RIFF") && data_bytes.len() >= 12 && &data_bytes[8..12] == b"WEBP" {
+            "image/webp".to_string()
+        } else if data_bytes.starts_with(b"BM") {
+            "image/bmp".to_string()
+        } else if data_bytes.starts_with(b"<?xml") || data_bytes.windows(4).any(|w| w == b"<svg") {
+            "image/svg+xml".to_string()
+        } else {
+            let lower_url = clean_url.to_lowercase();
+            if lower_url.contains(".png") {
+                "image/png".to_string()
+            } else if lower_url.contains(".jpg") || lower_url.contains(".jpeg") {
+                "image/jpeg".to_string()
+            } else if lower_url.contains(".webp") {
+                "image/webp".to_string()
+            } else if lower_url.contains(".gif") {
+                "image/gif".to_string()
+            } else if lower_url.contains(".svg") {
+                "image/svg+xml".to_string()
+            } else {
+                return Err("Завантажений файл не є підтримуваним зображенням".to_string());
+            }
+        };
+
+        // 4. Формування назви файлу
+        let path_part = clean_url.split('?').next().unwrap_or(clean_url);
+        let raw_filename = path_part.split('/').last().unwrap_or("image.png");
+        let name = if raw_filename.is_empty() || !raw_filename.contains('.') {
+            match detected_mime.as_str() {
+                "image/jpeg" => "image.jpg",
+                "image/webp" => "image.webp",
+                "image/gif" => "image.gif",
+                "image/svg+xml" => "image.svg",
+                _ => "image.png",
+            }
+            .to_string()
+        } else {
+            raw_filename.to_string()
+        };
+
+        Ok(crate::clipboard::ClipboardImageResult {
+            mime_type: detected_mime,
+            base64_data: crate::voice::encode_base64(&data_bytes),
+            name,
+        })
+    })
+    .await
+    .map_err(|e| format!("Помилка фонового потоку: {}", e))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fetch_image_from_url_invalid_protocol() {
+        tauri::async_runtime::block_on(async {
+            let res = fetch_image_from_url("ftp://example.com/test.png".to_string()).await;
+            assert!(res.is_err());
+            assert!(res.unwrap_err().contains("очікується протокол http або https"));
+        });
+    }
+
+    #[test]
+    fn test_fetch_image_from_url_empty() {
+        tauri::async_runtime::block_on(async {
+            let res = fetch_image_from_url("   ".to_string()).await;
+            assert!(res.is_err());
+        });
+    }
+}
+
+

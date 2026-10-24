@@ -125,6 +125,7 @@ pub fn run() {
             media::is_music_playing,
             display::control_display,
             web::summarize_webpage,
+            web::fetch_image_from_url,
             window::open_external_url,
             window::set_window_expanded,
             workspace::get_active_workspace
