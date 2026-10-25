@@ -5,7 +5,7 @@ import { createDefaultToolRegistry } from "./registry.ts";
 describe("ToolRegistry", () => {
   const registry = createDefaultToolRegistry();
 
-  it("registers all 9 core tools", () => {
+  it("registers all 10 core tools", () => {
     const expected = [
       "append_to_obsidian",
       "create_or_update_file",
@@ -16,6 +16,7 @@ describe("ToolRegistry", () => {
       "manage_memory",
       "manage_reminders",
       "summarize_webpage",
+      "convert_file",
     ];
 
     for (const name of expected) {
@@ -141,12 +142,30 @@ describe("ToolRegistry", () => {
     }
   });
 
+  it("validates convert_file arguments", () => {
+    const tool = registry.get("convert_file")!;
+    const invalid = tool.validateArgs({});
+    assert.equal(invalid.ok, false);
+
+    const valid = tool.validateArgs({
+      input_path: "/home/user/video.mp4",
+      target_format: ".GIF",
+      custom_output_path: "anim.gif",
+    });
+    assert.equal(valid.ok, true);
+    if (valid.ok) {
+      assert.equal(valid.args.input_path, "/home/user/video.mp4");
+      assert.equal(valid.args.target_format, "gif");
+      assert.equal(valid.args.custom_output_path, "anim.gif");
+    }
+  });
+
   it("generates function declarations and prompt rules for all tools", () => {
     const decls = registry.getFunctionDeclarations();
-    assert.equal(decls.length, 9);
+    assert.equal(decls.length, 10);
 
     const rules = registry.getPromptRules();
-    assert.equal(rules.length, 9);
+    assert.equal(rules.length, 10);
     for (const rule of rules) {
       assert.ok(typeof rule === "string" && rule.length > 5);
     }

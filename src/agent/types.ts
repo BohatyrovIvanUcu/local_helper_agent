@@ -74,7 +74,8 @@ export type WorkingToolName =
   | "control_display"
   | "manage_memory"
   | "manage_reminders"
-  | "summarize_webpage";
+  | "summarize_webpage"
+  | "convert_file";
 
 export type MascotState = "IDLE" | "THINKING" | "WORKING" | "SUCCESS" | "ERROR";
 

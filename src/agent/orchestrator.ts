@@ -308,12 +308,131 @@ export function detectDirectDisplayCommand(prompt: string): DirectDisplayCommand
   return null;
 }
 
+export interface AttachedFileMeta {
+  path: string;
+  name: string;
+  size?: number;
+  isDirectory?: boolean;
+}
+
+export interface DirectConvertCommand {
+  inputPath: string;
+  targetFormat: string;
+  customOutputPath?: string | null;
+}
+
+export function detectDirectConvertCommand(
+  prompt: string,
+  attachedPath?: string | null
+): DirectConvertCommand | null {
+  if (!attachedPath) return null;
+  const raw = prompt.trim().toLowerCase().replace(/[!.?,;]+$/g, "").trim();
+  const clean = stripConversationalNoise(raw);
+
+  // 1. Специфічні фрази: "зроби гіфку", "гіфка", "gif", "витягни аудіо/звук", "заархівуй"
+  if (
+    /^(?:зроби\s+)?(?:гіфку|гифку|гіф|гиф|gif|анімацію)$/iu.test(clean) ||
+    /(?:конвертуй|перетвори|зроби|to)\s+(?:це\s+)?(?:в|у|to)?\s*(?:гіфку|гифку|гіф|gif)/iu.test(
+      clean
+    )
+  ) {
+    return { inputPath: attachedPath, targetFormat: "gif" };
+  }
+
+  if (
+    /(?:витягни|дістань|витяг|екстракт)\s+(?:аудіо|звук|доріжку|пісню)/iu.test(clean) ||
+    /^(?:аудіо|звук|доріжка)$/iu.test(clean)
+  ) {
+    return { inputPath: attachedPath, targetFormat: "mp3" };
+  }
+
+  if (
+    /^(?:заархівуй|запакуй|архів|зроби\s+архів|в\s+архів|у\s+архів)$/iu.test(clean) ||
+    /(?:запакуй|заархівуй|архівуй)\s+(?:в|у)?\s*(?:zip|архів)/iu.test(clean)
+  ) {
+    return { inputPath: attachedPath, targetFormat: "zip" };
+  }
+
+  // Специфічні фрази для перетворення в текст: "переведи в текст", "зроби txt", "в текст", "витягни текст"
+  if (
+    /^(?:текст|txt|text|у\s+текст|в\s+текст)$/iu.test(clean) ||
+    /(?:переведи|конвертуй|перетвори|витягни|збережи|дістань|екстракт)\s+(?:це\s+)?(?:в|у|to)?\s*(?:текст|текстовий|txt|text)/iu.test(
+      clean
+    ) ||
+    /(?:в|у|to)\s+(?:текст|txt|text)$/iu.test(clean)
+  ) {
+    return { inputPath: attachedPath, targetFormat: "txt" };
+  }
+
+  // Специфічні фрази для перетворення в Markdown (через Microsoft MarkItDown): "переведи в markdown", "зроби md", "в markdown"
+  if (
+    /^(?:markdown|маркдаун|md|у\s+markdown|в\s+markdown|у\s+маркдаун|в\s+маркдаун|у\s+md|в\s+md)$/iu.test(
+      clean
+    ) ||
+    /(?:переведи|конвертуй|перетвори|експортуй|збережи|дістань|convert)\s+(?:це\s+)?(?:в|у|to)?\s*(?:markdown|маркдаун|md)/iu.test(
+      clean
+    ) ||
+    /(?:в|у|to)\s+(?:markdown|маркдаун|md)$/iu.test(clean)
+  ) {
+    return { inputPath: attachedPath, targetFormat: "md" };
+  }
+
+  // 2. Шаблони "конвертуй у [формат]", "перетвори в [формат]", "зроби [формат]", "в [формат]", "to [format]"
+  const match =
+    /^(?:конвертуй|перетвори|зроби|трансформуй|збережи|convert)\s+(?:це\s+|його\s+|файл\s+|відео\s+|папку\s+)?(?:в|у|to|як|as)\s+([a-zA-Z0-9.]+)/iu.exec(
+      clean
+    ) ||
+    /^(?:в|у|to)\s+([a-zA-Z0-9.]+)/iu.exec(clean) ||
+    /^(?:зроби|створи|make)\s+([a-zA-Z0-9.]+)/iu.exec(clean);
+
+  if (match && match[1]) {
+    const rawTarget = match[1].replace(/^\.+/, "").toLowerCase();
+    const validFormats = [
+      "gif",
+      "mp3",
+      "wav",
+      "mp4",
+      "mkv",
+      "webm",
+      "avi",
+      "mov",
+      "flac",
+      "ogg",
+      "aac",
+      "m4a",
+      "webp",
+      "png",
+      "jpg",
+      "jpeg",
+      "ico",
+      "bmp",
+      "pdf",
+      "txt",
+      "text",
+      "md",
+      "markdown",
+      "zip",
+      "tar.gz",
+      "tar",
+      "html",
+    ];
+    if (validFormats.includes(rawTarget)) {
+      const finalTarget =
+        rawTarget === "text" ? "txt" : rawTarget === "markdown" ? "md" : rawTarget;
+      return { inputPath: attachedPath, targetFormat: finalTarget };
+    }
+  }
+
+  return null;
+}
+
 export interface RunTurnOptions {
   modelClient: ModelClient;
   modelName: string;
   systemInstruction: string;
   userPrompt: string;
   attachments?: Array<Record<string, unknown>>;
+  attachedFile?: AttachedFileMeta | null;
   conversationHistory?: Array<Record<string, unknown>>;
   toolRegistry: ToolRegistry;
   invoke: InvokeFn;
@@ -422,6 +541,70 @@ export async function runAgentTurn(options: RunTurnOptions): Promise<TurnResult>
     }
   }
 
+  // Пряме миттєве виконання команд конвертації файлів (у gif, в mp3, запакуй в zip тощо)
+  const directConvert = detectDirectConvertCommand(userPrompt, options.attachedFile?.path);
+  if (directConvert) {
+    callbacks.onStateChange("WORKING", "convert_file");
+    try {
+      interface BackendConversionResult {
+        success: boolean;
+        input_path: string;
+        output_path: string;
+        output_filename: string;
+        output_size_bytes: number;
+        engine_used: string;
+        message: string;
+      }
+      const res = await invoke<BackendConversionResult>("convert_file", {
+        input_path: directConvert.inputPath,
+        target_format: directConvert.targetFormat,
+        custom_output_path: directConvert.customOutputPath ?? null,
+      });
+
+      const sizeKb = (res.output_size_bytes / 1024).toFixed(1);
+      const ext = directConvert.targetFormat.toLowerCase();
+      const badge =
+        ["mp3", "wav", "flac", "ogg", "aac", "m4a", "opus"].includes(ext)
+          ? "🎵"
+          : ["mp4", "webm", "mkv", "avi", "mov", "gif"].includes(ext)
+          ? "🎬"
+          : ["zip", "tar", "tar.gz"].includes(ext)
+          ? "📦"
+          : ["png", "jpg", "jpeg", "webp", "bmp", "ico"].includes(ext)
+          ? "🖼️"
+          : "📄";
+
+      const encodedPath = encodeURIComponent(res.output_path);
+      const summary = `Готово! Створено ${res.output_filename} (${sizeKb} KB) ${badge} [Відкрити файл](action://open?path=${encodedPath}) • [У папці](action://reveal?path=${encodedPath})`;
+
+      if (userPrompt.trim() && summary) {
+        try {
+          await invoke("append_conversation_turn", {
+            user_text: userPrompt.trim(),
+            model_text: summary,
+            tools_used: [`convert_file (${directConvert.targetFormat})`],
+            userText: userPrompt.trim(),
+            modelText: summary,
+            toolsUsed: [`convert_file (${directConvert.targetFormat})`],
+          });
+        } catch {
+          // ignore memory error
+        }
+      }
+
+      return {
+        text: summary,
+        executedTools: ["convert_file"],
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        text: `Помилка конвертації: ${msg}`,
+        executedTools: ["convert_file"],
+      };
+    }
+  }
+
   const ctx: ToolContext = {
     invoke,
     confirm: callbacks.onConfirmRequest,
@@ -442,8 +625,51 @@ export async function runAgentTurn(options: RunTurnOptions): Promise<TurnResult>
   for (const att of attachments) {
     userParts.push(att);
   }
-  if (userPrompt.trim()) {
-    userParts.push({ text: userPrompt });
+  let promptText = userPrompt.trim();
+  if (options.attachedFile) {
+    let filePreview = "";
+    const ext = options.attachedFile.name.split(".").pop()?.toLowerCase();
+    const textLikeExts = [
+      "txt",
+      "md",
+      "markdown",
+      "csv",
+      "json",
+      "log",
+      "pdf",
+      "docx",
+      "doc",
+      "xlsx",
+      "xls",
+      "pptx",
+      "ppt",
+      "html",
+      "htm",
+      "xml",
+    ];
+    if (!options.attachedFile.isDirectory && ext && textLikeExts.includes(ext)) {
+      try {
+        const fileContent = await invoke<string>("read_file_or_dir", {
+          target_path: options.attachedFile.path,
+        });
+        if (
+          fileContent &&
+          !fileContent.startsWith("Не вдалося") &&
+          !fileContent.startsWith("Доступ заборонено")
+        ) {
+          filePreview = `\n\n[Текстовий вміст прикріпленого файлу "${options.attachedFile.name}"]:\n"""\n${fileContent.slice(0, 10000)}\n"""`;
+        }
+      } catch {
+        // Залишаємо базовий опис шляху
+      }
+    }
+    const fileDesc = `[Прикріплений локальний файл/папка користувача: "${options.attachedFile.name}" (шлях: ${options.attachedFile.path}${
+      options.attachedFile.size ? `, розмір: ${options.attachedFile.size} байтів` : ""
+    }${options.attachedFile.isDirectory ? ", це папка/директорія" : ""})]${filePreview}`;
+    promptText = promptText ? `${fileDesc}\n\n${promptText}` : fileDesc;
+  }
+  if (promptText) {
+    userParts.push({ text: promptText });
   }
 
   contents.push({

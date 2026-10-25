@@ -22,7 +22,7 @@ pub async fn set_window_expanded(app: AppHandle, expanded: bool) -> Result<(), S
         let (w, h) = if expanded {
             (380.0, 440.0)
         } else {
-            (280.0, 258.0)
+            (280.0, 280.0)
         };
         let _ = window.set_size(tauri::LogicalSize::new(w, h));
     }

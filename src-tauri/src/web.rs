@@ -446,13 +446,23 @@ pub async fn fetch_image_from_url(url: String) -> Result<crate::clipboard::Clipb
             return Err("Некоректний URL: очікується протокол http або https".to_string());
         }
 
+        // Обчислюємо Referer для обходу hotlink-захисту (YouTube, Google, AliExpress тощо)
+        let referer = if let Some(idx) = clean_url.get(8..).and_then(|s| s.find('/')) {
+            format!("{}/", &clean_url[..8 + idx])
+        } else {
+            clean_url.to_string()
+        };
+
         // 1. Спроба завантаження через curl
         let curl_output = Command::new("curl")
             .args([
-                "-sSL",
-                "--max-time", "12",
+                "-sSLf",
+                "--max-time", "15",
                 "-H", "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
                 "-H", "Accept: image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                "-H", "Sec-Fetch-Dest: image",
+                "-H", "Sec-Fetch-Mode: no-cors",
+                "-e", &referer,
                 "-w", "\n__MIME__:%{content_type}",
                 clean_url,
             ])
@@ -477,9 +487,12 @@ pub async fn fetch_image_from_url(url: String) -> Result<crate::clipboard::Clipb
         // 2. Фолбек через Python urllib, якщо curl повернув порожні дані
         if data_bytes.is_empty() {
             let py_downloader = r#"
-import sys, urllib.request, ssl
+import sys, urllib.request, urllib.parse, ssl
 
 url = sys.argv[1].strip()
+parsed = urllib.parse.urlparse(url)
+referer = f"{parsed.scheme}://{parsed.netloc}/"
+
 ctx = ssl.create_default_context()
 ctx.check_hostname = False
 ctx.verify_mode = ssl.CERT_NONE
@@ -488,12 +501,15 @@ req = urllib.request.Request(
     url,
     headers={
         'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        'Sec-Fetch-Dest': 'image',
+        'Sec-Fetch-Mode': 'no-cors',
+        'Referer': referer
     }
 )
 try:
-    with urllib.request.urlopen(req, context=ctx, timeout=10.0) as resp:
-        b = resp.read(15_000_000)
+    with urllib.request.urlopen(req, context=ctx, timeout=12.0) as resp:
+        b = resp.read(25_000_000)
         ct = resp.headers.get_content_type() or 'image/png'
         sys.stdout.buffer.write(b)
         sys.stdout.buffer.write(b'\n__MIME__:' + ct.encode('utf-8'))
@@ -518,9 +534,15 @@ except Exception:
             return Err("Не вдалося завантажити зображення: ресурс недоступний або порожній".to_string());
         }
 
+        // Перевіряємо, чи це не HTML сторінка з помилкою
+        let is_html = data_bytes.starts_with(b"<!DOCTYPE") || data_bytes.starts_with(b"<html") || data_bytes.starts_with(b"<HTML");
+        if is_html {
+            return Err("За вказаним посиланням отримано веб-сторінку замість зображення".to_string());
+        }
+
         // 3. Визначення та валідація MIME-типу
-        let detected_mime = if mime_str.starts_with("image/") {
-            mime_str.split(';').next().unwrap_or("image/png").trim().to_string()
+        let detected_mime = if mime_str.to_lowercase().starts_with("image/") {
+            mime_str.split(';').next().unwrap_or("image/jpeg").trim().to_lowercase()
         } else if data_bytes.starts_with(b"\x89PNG") {
             "image/png".to_string()
         } else if data_bytes.starts_with(b"\xff\xd8\xff") {
@@ -529,6 +551,8 @@ except Exception:
             "image/gif".to_string()
         } else if data_bytes.starts_with(b"RIFF") && data_bytes.len() >= 12 && &data_bytes[8..12] == b"WEBP" {
             "image/webp".to_string()
+        } else if data_bytes.len() >= 12 && &data_bytes[4..8] == b"ftyp" {
+            "image/avif".to_string()
         } else if data_bytes.starts_with(b"BM") {
             "image/bmp".to_string()
         } else if data_bytes.starts_with(b"<?xml") || data_bytes.windows(4).any(|w| w == b"<svg") {
@@ -537,16 +561,16 @@ except Exception:
             let lower_url = clean_url.to_lowercase();
             if lower_url.contains(".png") {
                 "image/png".to_string()
-            } else if lower_url.contains(".jpg") || lower_url.contains(".jpeg") {
-                "image/jpeg".to_string()
             } else if lower_url.contains(".webp") {
                 "image/webp".to_string()
             } else if lower_url.contains(".gif") {
                 "image/gif".to_string()
             } else if lower_url.contains(".svg") {
                 "image/svg+xml".to_string()
+            } else if lower_url.contains(".avif") {
+                "image/avif".to_string()
             } else {
-                return Err("Завантажений файл не є підтримуваним зображенням".to_string());
+                "image/jpeg".to_string()
             }
         };
 
@@ -559,6 +583,7 @@ except Exception:
                 "image/webp" => "image.webp",
                 "image/gif" => "image.gif",
                 "image/svg+xml" => "image.svg",
+                "image/avif" => "image.avif",
                 _ => "image.png",
             }
             .to_string()

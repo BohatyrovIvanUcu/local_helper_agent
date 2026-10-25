@@ -3,6 +3,7 @@
 pub mod audio;
 pub mod clipboard;
 pub mod config;
+pub mod converter;
 pub mod display;
 pub mod files;
 pub mod media;
@@ -116,6 +117,7 @@ pub fn run() {
             voice::cancel_voice_recording,
             clipboard::read_image_base64,
             clipboard::read_clipboard_image,
+            clipboard::write_clipboard_text,
             config::get_app_config,
             media::control_media,
             memory::get_agent_memory,
@@ -128,7 +130,11 @@ pub fn run() {
             web::fetch_image_from_url,
             window::open_external_url,
             window::set_window_expanded,
-            workspace::get_active_workspace
+            workspace::get_active_workspace,
+            converter::convert_file,
+            converter::open_file,
+            converter::reveal_in_file_manager,
+            converter::get_available_conversion_formats
         ])
         .run(tauri::generate_context!())
         .expect("Помилка запуску Tauri-застосунку");

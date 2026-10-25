@@ -172,3 +172,73 @@ pub async fn read_clipboard_image(
     }
 }
 
+/// 10. Записує текстовий вміст у системний буфер обміну (GTK на Linux, clip на Windows, pbcopy на macOS).
+#[tauri::command]
+pub async fn write_clipboard_text(
+    app: tauri::AppHandle,
+    text: String,
+) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.run_on_main_thread(move || {
+            let res = (|| -> Option<()> {
+                let display = gdk::Display::default()?;
+                let clipboard = gtk::Clipboard::default(&display)?;
+                clipboard.set_text(&text);
+                clipboard.store();
+                Some(())
+            })();
+            let _ = tx.send(res.is_some());
+        })
+        .map_err(|e| format!("Помилка доступу до буфера обміну: {}", e))?;
+
+        let _ = rx
+            .recv_timeout(Duration::from_millis(1500))
+            .map_err(|_| "Час очікування буфера обміну вичерпано".to_string())?;
+        Ok(())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = app;
+        tauri::async_runtime::spawn_blocking(move || {
+            let mut child = std::process::Command::new("clip")
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| format!("Помилка запуску clip: {}", e))?;
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            let _ = child.wait();
+            Ok(())
+        })
+        .await
+        .map_err(|e| format!("Помилка фонового потоку: {}", e))?
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app;
+        tauri::async_runtime::spawn_blocking(move || {
+            let mut child = std::process::Command::new("pbcopy")
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| format!("Помилка запуску pbcopy: {}", e))?;
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            let _ = child.wait();
+            Ok(())
+        })
+        .await
+        .map_err(|e| format!("Помилка фонового потоку: {}", e))?
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+    {
+        let _ = app;
+        let _ = text;
+        Ok(())
+    }
+}
+

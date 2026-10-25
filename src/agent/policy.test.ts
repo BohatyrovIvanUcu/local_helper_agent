@@ -54,6 +54,10 @@ describe("SafetyPolicy", () => {
       evaluatePolicy("run_cli_command", { command: "mkdir -p ~/projects/my-app" }, dummyCtx).decision,
       "allow"
     );
+    assert.equal(
+      evaluatePolicy("run_cli_command", { command: "pdftotext -layout /tmp/doc.pdf -" }, dummyCtx).decision,
+      "allow"
+    );
   });
 
   it("requires confirmation for script execution and destructive commands", () => {

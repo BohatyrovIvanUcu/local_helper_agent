@@ -1,7 +1,7 @@
 {
   "name": "local-helper-ai",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "tauri": "GDK_BACKEND=x11 tauri",
     "build:app": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri build --no-bundle",
-    "build:deb": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri build --bundles deb && mkdir -p releases && cp src-tauri/target/release/bundle/deb/*.deb releases/local-helper-ai_0.4.0_amd64.deb"
+    "build:deb": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri build --bundles deb && mkdir -p releases && cp \"src-tauri/target/release/bundle/deb/Local Helper Mascot_0.5.0_amd64.deb\" releases/local-helper-ai_0.5.0_amd64.deb",
+    "clean": "cargo clean --manifest-path src-tauri/Cargo.toml && rm -rf dist"
   },
   "dependencies": {
     "@google/genai": "^1.0.0",

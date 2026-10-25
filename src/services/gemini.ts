@@ -22,6 +22,7 @@ export type {
   AgentMemory,
   AgentMemoryMessage as MemoryMessage,
 };
+export type { AttachedFileMeta } from "../agent/orchestrator.ts";
 
 export interface MediaAttachment {
   mimeType: string;
@@ -124,7 +125,8 @@ export const toolDeclarations: FunctionDeclaration[] =
 export async function askMascot(
   userPrompt: string,
   callbacks: AskMascotCallbacks,
-  attachments: MediaAttachment[] = []
+  attachments: MediaAttachment[] = [],
+  attachedFile?: import("../agent/orchestrator.ts").AttachedFileMeta | null
 ): Promise<string> {
   interface ActiveWorkspaceRaw {
     workspace_path?: string | null;
@@ -257,6 +259,7 @@ export async function askMascot(
     systemInstruction,
     userPrompt: effectiveText,
     attachments: rawAttachments,
+    attachedFile,
     conversationHistory,
     toolRegistry: defaultToolRegistry,
     invoke,

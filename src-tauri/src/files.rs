@@ -121,6 +121,61 @@ pub async fn read_file_or_dir(target_path: String) -> Result<String, String> {
                 ))
             }
         } else {
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+
+            // Для офісних документів, таблиць та презентацій використовуємо Microsoft MarkItDown
+            let markitdown_exts = ["xlsx", "xls", "docx", "doc", "pptx", "ppt", "html", "htm"];
+            if markitdown_exts.contains(&ext.as_str()) {
+                if let Some((bin, mut args)) = crate::converter::get_markitdown_command() {
+                    args.push(path.to_str().unwrap_or_default().to_string());
+                    let output = Command::new(&bin).args(&args).output();
+                    if let Ok(out) = output {
+                        if out.status.success() {
+                            let text = String::from_utf8_lossy(&out.stdout);
+                            let trimmed = text.trim();
+                            if !trimmed.is_empty() {
+                                return Ok(truncate_chars(trimmed, MAX_READ_CHARS));
+                            }
+                        }
+                    }
+                }
+            }
+
+            if ext == "pdf" {
+                if let Some((bin, mut args)) = crate::converter::get_markitdown_command() {
+                    args.push(path.to_str().unwrap_or_default().to_string());
+                    let output = Command::new(&bin).args(&args).output();
+                    if let Ok(out) = output {
+                        if out.status.success() {
+                            let text = String::from_utf8_lossy(&out.stdout);
+                            let trimmed = text.trim();
+                            if !trimmed.is_empty() {
+                                return Ok(truncate_chars(trimmed, MAX_READ_CHARS));
+                            }
+                        }
+                    }
+                }
+
+                if crate::converter::is_command_available("pdftotext") {
+                    let output = Command::new("pdftotext")
+                        .args(["-layout", path.to_str().unwrap_or_default(), "-"])
+                        .output();
+                    if let Ok(out) = output {
+                        if out.status.success() {
+                            let text = String::from_utf8_lossy(&out.stdout);
+                            let trimmed = text.trim();
+                            if !trimmed.is_empty() {
+                                return Ok(truncate_chars(trimmed, MAX_READ_CHARS));
+                            }
+                        }
+                    }
+                }
+            }
+
             let raw_content = fs::read_to_string(&path)
                 .map_err(|e| format!("Не вдалося прочитати файл '{}': {}", path.display(), e))?;
             Ok(truncate_chars(&raw_content, MAX_READ_CHARS))

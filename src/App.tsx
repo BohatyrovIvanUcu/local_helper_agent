@@ -10,8 +10,10 @@ import { AnimatePresence, motion, type TargetAndTransition } from "framer-motion
 import {
   AlertTriangle,
   Bell,
+  Check,
   ChevronsDownUp,
   ChevronsUpDown,
+  Copy,
   CornerDownLeft,
   ExternalLink,
   Hourglass,
@@ -30,7 +32,10 @@ import {
   type WorkingToolName,
   type ConfirmationRequest,
 } from "./services/gemini";
-import { extractImageFromDataTransfer } from "./utils/dragDrop";
+import {
+  extractAnyDropTarget,
+  type DataTransferLike,
+} from "./utils/dragDrop";
 
 // Синтетичний приємний дзвіночок нагадування через Web Audio API
 function playNotificationChime() {
@@ -76,6 +81,7 @@ const TOOL_LABELS: Record<WorkingToolName, string> = {
   manage_memory: "Запам'ятовую контекст 🧠...",
   manage_reminders: "Налаштовую нагадування ⏰...",
   summarize_webpage: "Аналізую веб-сторінку 🌐...",
+  convert_file: "Конвертую файл... 🔄",
 };
 
 interface ClipboardImagePayload {
@@ -263,7 +269,8 @@ function getMascotAnimation(
 }
 
 function renderBubbleContent(text: string) {
-  const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s)]+)/g;
+  const linkRegex =
+    /\[([^\]]+)\]\(((?:https?|action):\/\/[^\s)]+)\)|(https?:\/\/[^\s)]+)/g;
   const elements: React.ReactNode[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -276,21 +283,71 @@ function renderBubbleContent(text: string) {
     const label = match[1] || match[3];
     const url = match[2] || match[3];
 
-    elements.push(
-      <a
-        key={`${url}-${match.index}`}
-        href={url}
-        onClick={(e) => {
-          e.preventDefault();
-          invoke("open_external_url", { url }).catch(() => {});
-        }}
-        title={`Відкрити посилання: ${url}`}
-        className="inline-flex items-center gap-0.5 font-medium text-amber-400 underline decoration-amber-400/50 underline-offset-2 transition-colors hover:text-amber-300 hover:decoration-amber-300 cursor-pointer"
-      >
-        <span>{label}</span>
-        <ExternalLink className="inline h-2.5 w-2.5 opacity-80" />
-      </a>
-    );
+    if (url.startsWith("action://open?path=")) {
+      const targetPath = decodeURIComponent(
+        url.replace("action://open?path=", "")
+      );
+      elements.push(
+        <a
+          key={`${url}-${match.index}`}
+          href="#"
+          onClick={(e) => {
+            e.preventDefault();
+            invoke("open_file", { target_path: targetPath, targetPath }).catch((err) => {
+              console.warn("open_file failed, trying reveal:", err);
+              invoke("reveal_in_file_manager", { target_path: targetPath, targetPath }).catch((err2) => {
+                console.error("reveal_in_file_manager failed:", err2);
+              });
+            });
+          }}
+          title={`Відкрити файл: ${targetPath}`}
+          className="inline-flex items-center gap-1 font-semibold text-amber-300 underline decoration-amber-300/60 underline-offset-2 transition-colors hover:text-amber-200 cursor-pointer"
+        >
+          <span>{label}</span>
+          <ExternalLink className="inline h-2.5 w-2.5 opacity-80" />
+        </a>
+      );
+    } else if (url.startsWith("action://reveal?path=")) {
+      const targetPath = decodeURIComponent(
+        url.replace("action://reveal?path=", "")
+      );
+      elements.push(
+        <a
+          key={`${url}-${match.index}`}
+          href="#"
+          onClick={(e) => {
+            e.preventDefault();
+            invoke("reveal_in_file_manager", { target_path: targetPath, targetPath }).catch((err) => {
+              console.warn("reveal_in_file_manager failed, trying open:", err);
+              invoke("open_file", { target_path: targetPath, targetPath }).catch((err2) => {
+                console.error("open_file fallback failed:", err2);
+              });
+            });
+          }}
+          title={`Показати у файловому менеджері: ${targetPath}`}
+          className="inline-flex items-center gap-1 font-semibold text-amber-300 underline decoration-amber-300/60 underline-offset-2 transition-colors hover:text-amber-200 cursor-pointer"
+        >
+          <span>{label}</span>
+          <ExternalLink className="inline h-2.5 w-2.5 opacity-80" />
+        </a>
+      );
+    } else {
+      elements.push(
+        <a
+          key={`${url}-${match.index}`}
+          href={url}
+          onClick={(e) => {
+            e.preventDefault();
+            invoke("open_external_url", { url }).catch(() => {});
+          }}
+          title={`Відкрити посилання: ${url}`}
+          className="inline-flex items-center gap-0.5 font-medium text-amber-400 underline decoration-amber-400/50 underline-offset-2 transition-colors hover:text-amber-300 hover:decoration-amber-300 cursor-pointer"
+        >
+          <span>{label}</span>
+          <ExternalLink className="inline h-2.5 w-2.5 opacity-80" />
+        </a>
+      );
+    }
 
     lastIndex = match.index + match[0].length;
   }
@@ -300,6 +357,29 @@ function renderBubbleContent(text: string) {
   }
 
   return elements.length > 0 ? elements : text;
+}
+
+export interface AttachedFileItem {
+  path: string;
+  name: string;
+  size?: number;
+  isDirectory?: boolean;
+  isImage?: boolean;
+}
+
+function getFileIcon(name: string, isDirectory?: boolean): string {
+  if (isDirectory) return "📁";
+  const ext = name.split(".").pop()?.toLowerCase() || "";
+  if (["mp4", "mkv", "avi", "mov", "webm", "flv", "wmv", "3gp"].includes(ext))
+    return "🎬";
+  if (["mp3", "wav", "flac", "ogg", "aac", "m4a", "wma", "opus"].includes(ext))
+    return "🎵";
+  if (["png", "jpg", "jpeg", "webp", "gif", "bmp", "svg", "ico"].includes(ext))
+    return "🖼️";
+  if (["zip", "tar", "gz", "7z", "rar", "bz2"].includes(ext)) return "📦";
+  if (["pdf", "docx", "doc", "txt", "md", "odt", "rtf"].includes(ext))
+    return "📄";
+  return "📎";
 }
 
 export function cleanBubbleText(text: string | null | undefined): string | null {
@@ -324,6 +404,9 @@ export default function App() {
   const [attachedImage, setAttachedImage] = useState<MediaAttachment | null>(
     null
   );
+  const [attachedFile, setAttachedFile] = useState<AttachedFileItem | null>(
+    null
+  );
   const [photoPop, setPhotoPop] = useState<boolean>(false);
   const [isDraggingFile, setIsDraggingFile] = useState<boolean>(false);
   const [isRecording, setIsRecording] = useState<boolean>(false);
@@ -333,12 +416,14 @@ export default function App() {
     request: ConfirmationRequest;
     resolve: (approved: boolean) => void;
   } | null>(null);
+  const [hasCopied, setHasCopied] = useState<boolean>(false);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const successTimerRef = useRef<number | null>(null);
   const bubbleTimerRef = useRef<number | null>(null);
   const recordingTimerRef = useRef<number | null>(null);
+  const copiedTimerRef = useRef<number | null>(null);
 
   // Реф для відстеження Drag vs Click (> 5px)
   const pointerStateRef = useRef<{
@@ -418,8 +503,8 @@ export default function App() {
           const monitorBottom = monitor.position.y + monitor.size.height;
           const monitorRight = monitor.position.x + monitor.size.width;
 
-          // Ліміт по нижньому краю (висота вікна 258px або 440px + безпечний відступ 16px)
-          const windowHeight = isExpanded ? 440 : 258;
+          // Ліміт по нижньому краю (висота вікна 280px або 440px + безпечний відступ 16px)
+          const windowHeight = isExpanded ? 440 : 280;
           const bottomSafeMargin = 16;
           const maxAllowedY = monitorBottom - windowHeight - bottomSafeMargin;
           const minAllowedY = monitor.position.y + 16;
@@ -578,17 +663,56 @@ export default function App() {
     return () => {
       if (successTimerRef.current) window.clearTimeout(successTimerRef.current);
       if (bubbleTimerRef.current) window.clearTimeout(bubbleTimerRef.current);
+      if (copiedTimerRef.current) window.clearTimeout(copiedTimerRef.current);
       if (recordingTimerRef.current)
         window.clearInterval(recordingTimerRef.current);
       invoke("cancel_voice_recording").catch(() => {});
     };
   }, []);
 
+  useEffect(() => {
+    setHasCopied(false);
+  }, [bubbleText]);
+
+  const handleCopyBubbleText = async () => {
+    if (!displayedBubble) return;
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(displayedBubble);
+      } else {
+        throw new Error("No web clipboard");
+      }
+    } catch {
+      try {
+        await invoke("write_clipboard_text", { text: displayedBubble });
+      } catch {
+        try {
+          const textarea = document.createElement("textarea");
+          textarea.value = displayedBubble;
+          textarea.style.position = "fixed";
+          textarea.style.opacity = "0";
+          document.body.appendChild(textarea);
+          textarea.select();
+          document.execCommand("copy");
+          document.body.removeChild(textarea);
+        } catch {}
+      }
+    }
+
+    setHasCopied(true);
+    if (copiedTimerRef.current) {
+      window.clearTimeout(copiedTimerRef.current);
+    }
+    copiedTimerRef.current = window.setTimeout(() => {
+      setHasCopied(false);
+    }, 2000);
+  };
+
   const attachFile = async (file: File) => {
     const isImageMime = Boolean(file.type && file.type.startsWith("image/"));
-    const isImageExt = /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(file.name);
+    const isImageExt = /\.(png|jpe?g|webp|gif|bmp|svg|avif|ico)$/i.test(file.name);
     if (!isImageMime && !isImageExt) {
-      setBubbleText("Підтримуються лише файли зображень (PNG, JPG, WebP).");
+      setBubbleText("Підтримуються лише файли зображень (PNG, JPG, WebP, GIF, SVG).");
       return;
     }
     try {
@@ -625,6 +749,171 @@ export default function App() {
       setIsInputOpen(true);
     }
     window.setTimeout(() => inputRef.current?.focus(), 60);
+  };
+
+  const handleDrop = async (
+    dataTransfer: DataTransferLike | null,
+    e?: Event | React.SyntheticEvent
+  ) => {
+    if (e) {
+      e.preventDefault();
+      if ("stopPropagation" in e) e.stopPropagation();
+    }
+    setIsDraggingFile(false);
+    if (!dataTransfer) return;
+
+    const extractedTarget = extractAnyDropTarget(dataTransfer);
+    if (!extractedTarget) {
+      setBubbleText("Не вдалося розпізнати файл для перетягування.");
+      return;
+    }
+
+    const now = Date.now();
+    if (now - dropLockRef.current < 450) return;
+    dropLockRef.current = now;
+
+    if (extractedTarget.type === "image") {
+      const extracted = extractedTarget.extractedImage;
+      if (extracted.type === "file") {
+        await attachFile(extracted.file);
+      } else if (extracted.type === "data_url") {
+        applyClipboardImage({
+          mime_type: extracted.mimeType,
+          base64_data: extracted.base64Data,
+          name: "dropped_image.png",
+        });
+      } else if (extracted.type === "file_path") {
+        setAttachedFile({
+          path: extracted.path,
+          name: extracted.path.split("/").pop() || "image.png",
+          isImage: true,
+        });
+        try {
+          const base64Data = await invoke<string>("read_image_base64", {
+            filepath: extracted.path,
+          });
+          const ext = extracted.path.split(".").pop()?.toLowerCase();
+          const mime =
+            ext === "jpg" || ext === "jpeg"
+              ? "image/jpeg"
+              : ext === "webp"
+              ? "image/webp"
+              : ext === "gif"
+              ? "image/gif"
+              : ext === "svg"
+              ? "image/svg+xml"
+              : ext === "avif"
+              ? "image/avif"
+              : "image/png";
+          applyClipboardImage({
+            mime_type: mime,
+            base64_data: base64Data,
+            name: extracted.path.split("/").pop() || "image.png",
+          });
+        } catch {
+          setBubbleText("Не вдалося відкрити файл зображення.");
+        }
+      } else if (extracted.type === "web_url") {
+        setBubbleText("Завантажую фото... ⏳");
+        try {
+          const res = await invoke<ClipboardImagePayload>("fetch_image_from_url", {
+            url: extracted.url,
+          });
+          applyClipboardImage(res);
+        } catch (backendErr) {
+          try {
+            const fetchRes = await fetch(extracted.url, { cache: "no-cache" });
+            if (!fetchRes.ok) throw new Error("Fetch failed");
+            const blob = await fetchRes.blob();
+            if (!blob.type.startsWith("image/")) throw new Error("Not an image");
+            const filename =
+              extracted.url.split("/").pop()?.split("?")[0] || "image.png";
+            const file = new File([blob], filename, { type: blob.type });
+            await attachFile(file);
+          } catch {
+            const errMsg =
+              typeof backendErr === "string"
+                ? backendErr
+                : "Не вдалося завантажити зображення з цього сайту.";
+            setBubbleText(errMsg);
+          }
+        }
+      }
+    } else if (extractedTarget.type === "file_path") {
+      const path = extractedTarget.path;
+      const name = extractedTarget.name;
+      const isImage = /\.(png|jpe?g|webp|gif|bmp|svg|avif|ico)$/i.test(name);
+      setAttachedFile({
+        path,
+        name,
+        isImage,
+      });
+      setIsInputOpen(true);
+      if (isImage) {
+        try {
+          const base64Data = await invoke<string>("read_image_base64", {
+            filepath: path,
+          });
+          const ext = path.split(".").pop()?.toLowerCase();
+          const mime =
+            ext === "jpg" || ext === "jpeg"
+              ? "image/jpeg"
+              : ext === "webp"
+              ? "image/webp"
+              : ext === "gif"
+              ? "image/gif"
+              : ext === "svg"
+              ? "image/svg+xml"
+              : ext === "avif"
+              ? "image/avif"
+              : "image/png";
+          applyClipboardImage({
+            mime_type: mime,
+            base64_data: base64Data,
+            name,
+          });
+        } catch {
+          // ignore
+        }
+      } else {
+        setBubbleText(`Прикріплено: ${name}! Що з ним зробити?`);
+      }
+    } else if (extractedTarget.type === "file") {
+      const maybePath = (extractedTarget.file as unknown as { path?: string })
+        .path;
+      const name = extractedTarget.file.name;
+      const isImage =
+        Boolean(
+          extractedTarget.file.type &&
+            extractedTarget.file.type.startsWith("image/")
+        ) || /\.(png|jpe?g|webp|gif|bmp|svg|avif|ico)$/i.test(name);
+
+      if (maybePath) {
+        setAttachedFile({
+          path: maybePath,
+          name,
+          size: extractedTarget.file.size,
+          isImage,
+        });
+        setIsInputOpen(true);
+        if (isImage) {
+          await attachFile(extractedTarget.file);
+        } else {
+          setBubbleText(`Прикріплено: ${name}! Що з ним зробити?`);
+        }
+      } else if (isImage) {
+        await attachFile(extractedTarget.file);
+      } else {
+        setAttachedFile({
+          path: name,
+          name,
+          size: extractedTarget.file.size,
+          isImage: false,
+        });
+        setIsInputOpen(true);
+        setBubbleText(`Прикріплено: ${name}! Що з ним зробити?`);
+      }
+    }
   };
 
   const handlePasteEvent = async (
@@ -792,13 +1081,23 @@ export default function App() {
           setIsDraggingFile(false);
         } else if (event.payload.type === "drop") {
           setIsDraggingFile(false);
-          const now = Date.now();
-          if (now - dropLockRef.current < 450) return;
-
           const paths = event.payload.paths;
           if (paths && paths.length > 0) {
-            for (const path of paths) {
-              if (/\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(path)) {
+            const path = paths[0];
+            const name = path.split("/").filter(Boolean).pop() || "файл";
+            const isImage =
+              /\.(png|jpe?g|webp|gif|bmp|svg|avif|ico)$/i.test(path);
+
+            setAttachedFile({
+              path,
+              name,
+              isImage,
+            });
+            setIsInputOpen(true);
+
+            if (isImage) {
+              const now = Date.now();
+              if (now - dropLockRef.current >= 450) {
                 dropLockRef.current = now;
                 try {
                   const base64Data = await invoke<string>("read_image_base64", {
@@ -810,17 +1109,24 @@ export default function App() {
                       ? "image/jpeg"
                       : ext === "webp"
                       ? "image/webp"
+                      : ext === "gif"
+                      ? "image/gif"
+                      : ext === "svg"
+                      ? "image/svg+xml"
+                      : ext === "avif"
+                      ? "image/avif"
                       : "image/png";
                   applyClipboardImage({
                     mime_type: mime,
                     base64_data: base64Data,
-                    name: path.split("/").pop() || "image.png",
+                    name,
                   });
-                  break;
                 } catch {
-                  setBubbleText("Не вдалося відкрити файл зображення.");
+                  // ignore
                 }
               }
+            } else {
+              setBubbleText(`Прикріплено: ${name}! Що з ним зробити?`);
             }
           }
         }
@@ -834,17 +1140,50 @@ export default function App() {
       })
       .catch(() => {});
 
-    const preventWindowDrop = (e: DragEvent) => {
+    const onWindowDragEnter = (e: DragEvent) => {
       e.preventDefault();
+      setIsDraggingFile(true);
     };
-    window.addEventListener("dragover", preventWindowDrop, false);
-    window.addEventListener("drop", preventWindowDrop, false);
+
+    const onWindowDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = "copy";
+      }
+      setIsDraggingFile(true);
+    };
+
+    const onWindowDragLeave = (e: DragEvent) => {
+      if (
+        e.clientX <= 0 ||
+        e.clientY <= 0 ||
+        e.clientX >= window.innerWidth ||
+        e.clientY >= window.innerHeight
+      ) {
+        setIsDraggingFile(false);
+      }
+    };
+
+    const onWindowDrop = (e: DragEvent) => {
+      e.preventDefault();
+      setIsDraggingFile(false);
+      if (e.dataTransfer) {
+        void handleDrop(e.dataTransfer, e);
+      }
+    };
+
+    window.addEventListener("dragenter", onWindowDragEnter, false);
+    window.addEventListener("dragover", onWindowDragOver, false);
+    window.addEventListener("dragleave", onWindowDragLeave, false);
+    window.addEventListener("drop", onWindowDrop, false);
 
     return () => {
       isMounted = false;
       if (unlisten) unlisten();
-      window.removeEventListener("dragover", preventWindowDrop, false);
-      window.removeEventListener("drop", preventWindowDrop, false);
+      window.removeEventListener("dragenter", onWindowDragEnter, false);
+      window.removeEventListener("dragover", onWindowDragOver, false);
+      window.removeEventListener("dragleave", onWindowDragLeave, false);
+      window.removeEventListener("drop", onWindowDrop, false);
     };
   }, []);
 
@@ -926,10 +1265,13 @@ export default function App() {
       successTimerRef.current = null;
     }
 
+    const currentAttachedFile = attachedFile;
     setPrompt("");
     setAttachedImage(null);
+    setAttachedFile(null);
     setIsInputOpen(false);
     setBubbleText(null);
+    setHasCopied(false);
     if (isExpanded) {
       setIsExpanded(false);
       invoke("set_window_expanded", { expanded: false }).catch(() => {});
@@ -948,7 +1290,15 @@ export default function App() {
               setPendingConfirmation({ request, resolve });
             }),
         },
-        mediaItems
+        mediaItems,
+        currentAttachedFile
+          ? {
+              path: currentAttachedFile.path,
+              name: currentAttachedFile.name,
+              size: currentAttachedFile.size,
+              isDirectory: currentAttachedFile.isDirectory,
+            }
+          : null
       );
 
       setBubbleText(cleanBubbleText(reply));
@@ -1016,7 +1366,7 @@ export default function App() {
     }
 
     const trimmed = prompt.trim();
-    if (!trimmed && !attachedImage) return;
+    if (!trimmed && !attachedImage && !attachedFile) return;
 
     const attachments: MediaAttachment[] = attachedImage ? [attachedImage] : [];
     await executePromptRequest(trimmed, attachments);
@@ -1045,72 +1395,6 @@ export default function App() {
     e.target.value = "";
   };
 
-  const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setIsDraggingFile(false);
-
-    const now = Date.now();
-    if (now - dropLockRef.current < 450) return;
-
-    const extracted = extractImageFromDataTransfer(e.dataTransfer);
-    if (!extracted) {
-      return;
-    }
-
-    dropLockRef.current = now;
-
-    if (extracted.type === "file") {
-      await attachFile(extracted.file);
-    } else if (extracted.type === "data_url") {
-      applyClipboardImage({
-        mime_type: extracted.mimeType,
-        base64_data: extracted.base64Data,
-        name: "dropped_image.png",
-      });
-    } else if (extracted.type === "file_path") {
-      try {
-        const base64Data = await invoke<string>("read_image_base64", {
-          filepath: extracted.path,
-        });
-        const ext = extracted.path.split(".").pop()?.toLowerCase();
-        const mime =
-          ext === "jpg" || ext === "jpeg"
-            ? "image/jpeg"
-            : ext === "webp"
-            ? "image/webp"
-            : "image/png";
-        applyClipboardImage({
-          mime_type: mime,
-          base64_data: base64Data,
-          name: extracted.path.split("/").pop() || "image.png",
-        });
-      } catch {
-        setBubbleText("Не вдалося відкрити файл зображення.");
-      }
-    } else if (extracted.type === "web_url") {
-      setBubbleText("Завантажую фото... ⏳");
-      try {
-        const res = await invoke<ClipboardImagePayload>("fetch_image_from_url", {
-          url: extracted.url,
-        });
-        applyClipboardImage(res);
-      } catch {
-        try {
-          const fetchRes = await fetch(extracted.url, { cache: "no-cache" });
-          if (!fetchRes.ok) throw new Error("Fetch failed");
-          const blob = await fetchRes.blob();
-          if (!blob.type.startsWith("image/")) throw new Error("Not an image");
-          const filename =
-            extracted.url.split("/").pop()?.split("?")[0] || "image.png";
-          const file = new File([blob], filename, { type: blob.type });
-          await attachFile(file);
-        } catch {
-          setBubbleText("Не вдалося завантажити зображення з цього посилання.");
-        }
-      }
-    }
-  };
-
   const spriteSrc = getMascotSprite(mascotState, activeTool, isMusicPlaying);
 
   return (
@@ -1131,10 +1415,10 @@ export default function App() {
           setIsDraggingFile(false);
         }
       }}
-      onDrop={(e) => void handleDrop(e)}
+      onDrop={(e) => void handleDrop(e.dataTransfer, e)}
       className={`relative flex ${
-        isExpanded ? "h-[440px] w-[380px]" : "h-[258px] w-[280px]"
-      } flex-col items-center justify-start bg-transparent px-3 pt-6 select-none transition-all duration-200`}
+        isExpanded ? "h-[440px] w-[380px]" : "h-[280px] w-[280px]"
+      } flex-col items-center justify-start bg-transparent px-3 pt-2 select-none transition-all duration-200`}
     >
       {/* Прихований input для кнопки «Скріпка» */}
       <input
@@ -1226,7 +1510,7 @@ export default function App() {
               exit={{ opacity: 0, y: -4, scale: 0.96 }}
               transition={{ duration: 0.15, ease: "easeOut" }}
               className={`relative ${
-                isExpanded ? "max-h-[295px]" : "max-h-[105px]"
+                isExpanded ? "max-h-[295px]" : "max-h-[145px]"
               } w-full overflow-y-auto overflow-x-hidden rounded-2xl border px-3 py-2 text-xs leading-relaxed shadow-xl transition-[max-height] duration-150 ease-out ${
                 mascotState === "ERROR"
                   ? isOverloadNotice
@@ -1282,30 +1566,49 @@ export default function App() {
                   )}
                 </div>
 
-                {/* Правий кут: Дві стрілочки в лінію (розгорнути / згорнути вікно виводу) */}
+                {/* Правий кут: Кнопка копіювання + дві стрілочки в лінію (розгорнути / згорнути) */}
                 {!isBusy && !pendingConfirmation && (
-                  <button
-                    type="button"
-                    onClick={toggleExpanded}
-                    aria-label={
-                      isExpanded ? "Зменшити вікно виводу" : "Збільшити вікно виводу"
-                    }
-                    title={
-                      isExpanded ? "Зменшити вікно виводу" : "Збільшити вікно виводу"
-                    }
-                    className="rounded-md p-0.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
-                  >
-                    {isExpanded ? (
-                      <ChevronsDownUp className="h-3.5 w-3.5 text-amber-400" />
-                    ) : (
-                      <ChevronsUpDown className="h-3.5 w-3.5" />
-                    )}
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={handleCopyBubbleText}
+                      aria-label="Скопіювати відповідь"
+                      title={hasCopied ? "Скопійовано!" : "Скопіювати відповідь"}
+                      className={`rounded-md p-0.5 transition-colors ${
+                        hasCopied
+                          ? "bg-emerald-500/20 text-emerald-400"
+                          : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+                      }`}
+                    >
+                      {hasCopied ? (
+                        <Check className="h-3.5 w-3.5 text-emerald-400" />
+                      ) : (
+                        <Copy className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={toggleExpanded}
+                      aria-label={
+                        isExpanded ? "Зменшити вікно виводу" : "Збільшити вікно виводу"
+                      }
+                      title={
+                        isExpanded ? "Зменшити вікно виводу" : "Збільшити вікно виводу"
+                      }
+                      className="rounded-md p-0.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
+                    >
+                      {isExpanded ? (
+                        <ChevronsDownUp className="h-3.5 w-3.5 text-amber-400" />
+                      ) : (
+                        <ChevronsUpDown className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  </div>
                 )}
               </div>
 
               {pendingConfirmation ? (
-                <div className="mt-1 flex flex-col gap-1.5">
+                <div className="mt-1 flex flex-col gap-1.5 pb-0.5">
                   <div className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-400">
                     <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-400" />
                     <span className="truncate">{pendingConfirmation.request.title}</span>
@@ -1313,7 +1616,7 @@ export default function App() {
                   <div className="max-h-[36px] overflow-hidden text-ellipsis whitespace-nowrap rounded border border-zinc-700/50 bg-black/50 px-2 py-1 font-mono text-[10px] text-zinc-300">
                     {pendingConfirmation.request.details}
                   </div>
-                  <div className="flex items-center justify-end gap-1.5 pt-1">
+                  <div className="flex items-center justify-end gap-2 pt-1 pb-1">
                     <button
                       type="button"
                       onClick={() => {
@@ -1321,7 +1624,7 @@ export default function App() {
                         setPendingConfirmation(null);
                         cb(false);
                       }}
-                      className="rounded bg-zinc-800 px-2.5 py-1 text-[11px] text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-white"
+                      className="rounded bg-zinc-800 px-2.5 py-1 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-white"
                     >
                       Скасувати
                     </button>
@@ -1332,16 +1635,47 @@ export default function App() {
                         setPendingConfirmation(null);
                         cb(true);
                       }}
-                      className="rounded bg-amber-500 px-2.5 py-1 text-[11px] font-medium text-black transition-colors hover:bg-amber-400"
+                      className="rounded bg-amber-500 px-2.5 py-1 text-[11px] font-semibold text-black transition-colors hover:bg-amber-400"
                     >
                       Підтвердити
                     </button>
                   </div>
                 </div>
               ) : (
-                <div className="mt-0.5 whitespace-pre-wrap break-words pr-1 text-[12px] text-zinc-100">
-                  {renderBubbleContent(displayedBubble)}
-                </div>
+                <>
+                  <div className="mt-0.5 whitespace-pre-wrap break-words pr-1 text-[12px] text-zinc-100">
+                    {renderBubbleContent(displayedBubble)}
+                  </div>
+
+                  {/* Кнопка швидкого копіювання після відповіді ШІ */}
+                  {!isBusy && (
+                    <div className="mt-2 flex items-center justify-end border-t border-zinc-800/80 pt-1.5">
+                      <button
+                        type="button"
+                        onClick={handleCopyBubbleText}
+                        aria-label="Скопіювати відповідь"
+                        title="Скопіювати весь текст відповіді"
+                        className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium transition-all ${
+                          hasCopied
+                            ? "border border-emerald-500/40 bg-emerald-500/20 text-emerald-400"
+                            : "border border-zinc-700/60 bg-zinc-800/80 text-zinc-300 hover:border-zinc-600 hover:bg-zinc-700 hover:text-white"
+                        }`}
+                      >
+                        {hasCopied ? (
+                          <>
+                            <Check className="h-3 w-3 text-emerald-400" />
+                            <span>Скопійовано!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="h-3 w-3 text-zinc-400" />
+                            <span>Копіювати</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </motion.div>
           )}
@@ -1359,7 +1693,7 @@ export default function App() {
               onPaste={(e) => void handlePasteEvent(e)}
               className="mt-0.5 flex w-full flex-col gap-1.5 rounded-xl border border-zinc-700/70 bg-zinc-900/98 px-2.5 py-2 shadow-xl"
             >
-              {/* Прев'ю прикріпленого зображення з анімацією та статусом */}
+              {/* Прев'ю прикріпленого зображення або файлу з анімацією та статусом */}
               <AnimatePresence>
                 {attachedImage && (
                   <motion.div
@@ -1397,6 +1731,41 @@ export default function App() {
                     </button>
                   </motion.div>
                 )}
+
+                {attachedFile && !attachedImage && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.85, y: -6 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.85, y: -6 }}
+                    transition={{ type: "spring", stiffness: 350, damping: 24 }}
+                    className="flex items-center justify-between gap-2 rounded-lg border border-amber-400/40 bg-zinc-800/90 px-2 py-1 shadow-md ring-1 ring-amber-400/20"
+                  >
+                    <div className="flex items-center gap-2 overflow-hidden">
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-amber-400/30 bg-zinc-900/80 text-sm shadow-sm">
+                        {getFileIcon(attachedFile.name, attachedFile.isDirectory)}
+                      </span>
+                      <div className="flex flex-col overflow-hidden leading-tight">
+                        <span className="truncate text-[11px] font-medium text-zinc-200">
+                          {attachedFile.name}
+                        </span>
+                        <span className="text-[9.5px] text-amber-400/80">
+                          {attachedFile.isDirectory
+                            ? "Папку прикріплено ✓"
+                            : "Файл прикріплено ✓"}
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setAttachedFile(null)}
+                      title="Відкріпити файл"
+                      aria-label="Відкріпити файл"
+                      className="rounded p-0.5 text-zinc-400 transition-colors hover:bg-zinc-700 hover:text-zinc-100"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </motion.div>
+                )}
               </AnimatePresence>
 
               <div className="flex w-full items-center gap-1.5">
@@ -1406,20 +1775,22 @@ export default function App() {
                   onClick={() => fileInputRef.current?.click()}
                   disabled={isBusy || isRecording}
                   title={
-                    attachedImage
+                    attachedFile
+                      ? `Прикріплено: ${attachedFile.name}`
+                      : attachedImage
                       ? `Прикріплено: ${attachedImage.name}`
-                      : "Прикріпити фото (або Ctrl+V)"
+                      : "Прикріпити фото (або перетягніть файл)"
                   }
-                  aria-label="Прикріпити фото"
+                  aria-label="Прикріпити файл або фото"
                   className={`relative flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition-all disabled:opacity-40 ${
-                    attachedImage
+                    attachedImage || attachedFile
                       ? "bg-amber-400/20 text-amber-400 hover:bg-amber-400/30"
                       : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
                   }`}
                 >
                   <Paperclip className="h-3.5 w-3.5" />
-                  {/* Пімпочка-індикатор прикріпленого фото */}
-                  {attachedImage && (
+                  {/* Пімпочка-індикатор прикріпленого файлу / фото */}
+                  {(attachedImage || attachedFile) && (
                     <span className="absolute -right-0.5 -top-0.5 flex h-2 w-2">
                       <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
                       <span className="relative inline-flex h-2 w-2 rounded-full border border-zinc-900 bg-amber-500" />
@@ -1444,7 +1815,11 @@ export default function App() {
                     onPaste={(e) => void handlePasteEvent(e)}
                     disabled={isBusy}
                     placeholder={
-                      attachedImage ? "Додати підпис..." : "Що зробити?"
+                      attachedFile
+                        ? "Наприклад: зроби gif / в mp3 / що тут?"
+                        : attachedImage
+                        ? "Додати підпис..."
+                        : "Що зробити?"
                     }
                     className="w-full bg-transparent text-xs text-zinc-100 placeholder-zinc-400 outline-none disabled:opacity-50"
                   />
@@ -1478,7 +1853,11 @@ export default function App() {
                 <button
                   type="submit"
                   disabled={
-                    (!prompt.trim() && !attachedImage && !isRecording) || isBusy
+                    (!prompt.trim() &&
+                      !attachedImage &&
+                      !attachedFile &&
+                      !isRecording) ||
+                    isBusy
                   }
                   aria-label="Відправити запит"
                   className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-amber-400/90 text-zinc-950 transition-all hover:bg-amber-300 disabled:opacity-40"

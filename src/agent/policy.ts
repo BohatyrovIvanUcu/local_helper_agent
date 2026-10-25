@@ -62,6 +62,9 @@ const READONLY_COMMANDS = new Set([
   "echo",
   "stat",
   "file",
+  "pdftotext",
+  "pdfinfo",
+  "markitdown",
 ]);
 
 const APP_LAUNCH_COMMANDS = new Set([

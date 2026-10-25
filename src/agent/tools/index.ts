@@ -7,6 +7,7 @@ import { memoryTool } from "./memory.ts";
 import { remindersTool } from "./reminders.ts";
 import { webTool } from "./web.ts";
 import { displayTool } from "./display.ts";
+import { convertFileTool } from "./converter.ts";
 
 export {
   obsidianTool,
@@ -18,6 +19,7 @@ export {
   remindersTool,
   webTool,
   displayTool,
+  convertFileTool,
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -31,5 +33,6 @@ export const ALL_BUILTIN_TOOLS: ToolSpec<any>[] = [
   remindersTool,
   webTool,
   displayTool,
+  convertFileTool,
 ];
 

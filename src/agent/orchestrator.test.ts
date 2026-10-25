@@ -5,6 +5,7 @@ import {
   stripToolExecutionNotice,
   detectDirectMediaCommand,
   detectDirectDisplayCommand,
+  detectDirectConvertCommand,
   type ModelClient,
 } from "./orchestrator.ts";
 import { createDefaultToolRegistry } from "./registry.ts";
@@ -419,6 +420,115 @@ describe("runAgentTurn", () => {
       value: 30,
       enabled: null,
       temperature: null,
+    });
+  });
+
+  it("detectDirectConvertCommand recognizes file conversion requests", () => {
+    assert.deepEqual(
+      detectDirectConvertCommand("зроби gif", "/home/user/video.mp4"),
+      {
+        inputPath: "/home/user/video.mp4",
+        targetFormat: "gif",
+      }
+    );
+    assert.deepEqual(
+      detectDirectConvertCommand("конвертуй у mp3", "/home/user/audio.m4a"),
+      {
+        inputPath: "/home/user/audio.m4a",
+        targetFormat: "mp3",
+      }
+    );
+    assert.deepEqual(
+      detectDirectConvertCommand("запакуй в zip", "/home/user/my_folder"),
+      {
+        inputPath: "/home/user/my_folder",
+        targetFormat: "zip",
+      }
+    );
+    assert.deepEqual(
+      detectDirectConvertCommand("в webp", "/home/user/photo.png"),
+      {
+        inputPath: "/home/user/photo.png",
+        targetFormat: "webp",
+      }
+    );
+    assert.deepEqual(
+      detectDirectConvertCommand("переведи в текст", "/home/user/document.pdf"),
+      {
+        inputPath: "/home/user/document.pdf",
+        targetFormat: "txt",
+      }
+    );
+    assert.deepEqual(
+      detectDirectConvertCommand("зроби txt", "/home/user/notes.pdf"),
+      {
+        inputPath: "/home/user/notes.pdf",
+        targetFormat: "txt",
+      }
+    );
+    assert.deepEqual(
+      detectDirectConvertCommand("переведи в markdown", "/home/user/table.xlsx"),
+      {
+        inputPath: "/home/user/table.xlsx",
+        targetFormat: "md",
+      }
+    );
+    assert.deepEqual(
+      detectDirectConvertCommand("зроби md", "/home/user/doc.docx"),
+      {
+        inputPath: "/home/user/doc.docx",
+        targetFormat: "md",
+      }
+    );
+    assert.equal(detectDirectConvertCommand("що в цьому файлі?", "/home/user/doc.pdf"), null);
+    assert.equal(detectDirectConvertCommand("зроби gif", null), null);
+  });
+
+  it("executes direct convert command instantly without calling LLM", async () => {
+    let llmCalled = false;
+    const fakeClient: ModelClient = {
+      generateContent: async () => {
+        llmCalled = true;
+        throw new Error("LLM should not be called for direct convert commands!");
+      },
+    };
+
+    const invokedCommands: Array<{ cmd: string; args: unknown }> = [];
+    const res = await runAgentTurn({
+      modelClient: fakeClient,
+      modelName: "gemini-3.5-flash-lite",
+      systemInstruction: "System prompt",
+      userPrompt: "зроби gif",
+      attachedFile: {
+        path: "/home/user/sample.mp4",
+        name: "sample.mp4",
+      },
+      toolRegistry: registry,
+      invoke: async <T>(cmd: string, args: unknown): Promise<T> => {
+        invokedCommands.push({ cmd, args });
+        return {
+          success: true,
+          input_path: "/home/user/sample.mp4",
+          output_path: "/home/user/sample.gif",
+          output_filename: "sample.gif",
+          output_size_bytes: 512000,
+          engine_used: "FFmpeg (HQ Palettegen)",
+          message: "Успішно створено",
+        } as unknown as T;
+      },
+      callbacks: {
+        onStateChange: () => {},
+      },
+    });
+
+    assert.equal(llmCalled, false);
+    assert.ok(res.text.includes("sample.gif"));
+    assert.deepEqual(res.executedTools, ["convert_file"]);
+    assert.equal(invokedCommands[0].cmd, "convert_file");
+    assert.deepEqual(invokedCommands[0].args, {
+      input_path: "/home/user/sample.mp4",
+      target_format: "gif",
+      custom_output_path: null,
     });
   });
 });
