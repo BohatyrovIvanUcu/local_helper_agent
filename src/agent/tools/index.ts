@@ -8,6 +8,9 @@ import { remindersTool } from "./reminders.ts";
 import { webTool } from "./web.ts";
 import { displayTool } from "./display.ts";
 import { convertFileTool } from "./converter.ts";
+import { openDiskAnalyzerTool } from "./disk.ts";
+import { shareFileWifiTool } from "./share.ts";
+import { cleanDownloadsTool } from "./downloads.ts";
 
 export {
   obsidianTool,
@@ -20,6 +23,9 @@ export {
   webTool,
   displayTool,
   convertFileTool,
+  openDiskAnalyzerTool,
+  shareFileWifiTool,
+  cleanDownloadsTool,
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -34,5 +40,8 @@ export const ALL_BUILTIN_TOOLS: ToolSpec<any>[] = [
   webTool,
   displayTool,
   convertFileTool,
+  openDiskAnalyzerTool,
+  shareFileWifiTool,
+  cleanDownloadsTool,
 ];
 

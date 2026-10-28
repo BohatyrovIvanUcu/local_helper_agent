@@ -36,6 +36,7 @@ import {
   extractAnyDropTarget,
   type DataTransferLike,
 } from "./utils/dragDrop";
+import { DownloadsModal } from "./components/Downloads/DownloadsModal";
 
 // Синтетичний приємний дзвіночок нагадування через Web Audio API
 function playNotificationChime() {
@@ -82,6 +83,9 @@ const TOOL_LABELS: Record<WorkingToolName, string> = {
   manage_reminders: "Налаштовую нагадування ⏰...",
   summarize_webpage: "Аналізую веб-сторінку 🌐...",
   convert_file: "Конвертую файл... 🔄",
+  open_disk_analyzer: "Відкриваю WizTree... 🗺️",
+  share_file_wifi: "Піднімаю Wi-Fi роздачу... 📲",
+  clean_downloads: "Аналізую завантаження... 🧹",
 };
 
 interface ClipboardImagePayload {
@@ -268,7 +272,10 @@ function getMascotAnimation(
   }
 }
 
-function renderBubbleContent(text: string) {
+function renderBubbleContent(
+  text: string,
+  onAction?: (action: string) => void
+) {
   const linkRegex =
     /\[([^\]]+)\]\(((?:https?|action):\/\/[^\s)]+)\)|(https?:\/\/[^\s)]+)/g;
   const elements: React.ReactNode[] = [];
@@ -325,6 +332,58 @@ function renderBubbleContent(text: string) {
             });
           }}
           title={`Показати у файловому менеджері: ${targetPath}`}
+          className="inline-flex items-center gap-1 font-semibold text-amber-300 underline decoration-amber-300/60 underline-offset-2 transition-colors hover:text-amber-200 cursor-pointer"
+        >
+          <span>{label}</span>
+          <ExternalLink className="inline h-2.5 w-2.5 opacity-80" />
+        </a>
+      );
+    } else if (url.startsWith("action://open_wiztree")) {
+      elements.push(
+        <a
+          key={`${url}-${match.index}`}
+          href="#"
+          onClick={(e) => {
+            e.preventDefault();
+            invoke("open_disk_analyzer_window", {}).catch((err) =>
+              console.error(err)
+            );
+          }}
+          title="Відкрити WizTree"
+          className="inline-flex items-center gap-1 font-semibold text-indigo-300 underline decoration-indigo-300/60 underline-offset-2 transition-colors hover:text-indigo-200 cursor-pointer"
+        >
+          <span>{label}</span>
+          <ExternalLink className="inline h-2.5 w-2.5 opacity-80" />
+        </a>
+      );
+    } else if (url.startsWith("action://open_share")) {
+      elements.push(
+        <a
+          key={`${url}-${match.index}`}
+          href="#"
+          onClick={(e) => {
+            e.preventDefault();
+            invoke("open_share_window", {}).catch((err) =>
+              console.error(err)
+            );
+          }}
+          title="Відкрити вікно роздачі Wi-Fi"
+          className="inline-flex items-center gap-1 font-semibold text-emerald-300 underline decoration-emerald-300/60 underline-offset-2 transition-colors hover:text-emerald-200 cursor-pointer"
+        >
+          <span>{label}</span>
+          <ExternalLink className="inline h-2.5 w-2.5 opacity-80" />
+        </a>
+      );
+    } else if (url.startsWith("action://clean_downloads")) {
+      elements.push(
+        <a
+          key={`${url}-${match.index}`}
+          href="#"
+          onClick={(e) => {
+            e.preventDefault();
+            if (onAction) onAction("clean_downloads");
+          }}
+          title="Прибрати Downloads"
           className="inline-flex items-center gap-1 font-semibold text-amber-300 underline decoration-amber-300/60 underline-offset-2 transition-colors hover:text-amber-200 cursor-pointer"
         >
           <span>{label}</span>
@@ -417,6 +476,7 @@ export default function App() {
     resolve: (approved: boolean) => void;
   } | null>(null);
   const [hasCopied, setHasCopied] = useState<boolean>(false);
+  const [isDownloadsModalOpen, setIsDownloadsModalOpen] = useState<boolean>(false);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -1644,7 +1704,11 @@ export default function App() {
               ) : (
                 <>
                   <div className="mt-0.5 whitespace-pre-wrap break-words pr-1 text-[12px] text-zinc-100">
-                    {renderBubbleContent(displayedBubble)}
+                    {renderBubbleContent(displayedBubble, (action) => {
+                      if (action === "clean_downloads") {
+                        setIsDownloadsModalOpen(true);
+                      }
+                    })}
                   </div>
 
                   {/* Кнопка швидкого копіювання після відповіді ШІ */}
@@ -1755,15 +1819,30 @@ export default function App() {
                         </span>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setAttachedFile(null)}
-                      title="Відкріпити файл"
-                      aria-label="Відкріпити файл"
-                      className="rounded p-0.5 text-zinc-400 transition-colors hover:bg-zinc-700 hover:text-zinc-100"
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (attachedFile?.path) {
+                            void executePromptRequest("скинь на телефон", []);
+                          }
+                        }}
+                        className="flex items-center gap-1 rounded bg-indigo-500/20 px-1.5 py-0.5 text-[9.5px] font-medium text-indigo-300 transition-colors hover:bg-indigo-500/30"
+                        title="Роздати файл по локальному Wi-Fi на телефон"
+                      >
+                        <span>📱</span>
+                        <span>Скинути на телефон</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAttachedFile(null)}
+                        title="Відкріпити файл"
+                        aria-label="Відкріпити файл"
+                        className="rounded p-0.5 text-zinc-400 transition-colors hover:bg-zinc-700 hover:text-zinc-100"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -1868,6 +1947,15 @@ export default function App() {
             </motion.form>
           )}
         </AnimatePresence>
+
+        {isDownloadsModalOpen && (
+          <DownloadsModal
+            onClose={() => setIsDownloadsModalOpen(false)}
+            onSuccess={(msg) => {
+              setBubbleText(msg);
+            }}
+          />
+        )}
       </div>
     </div>
   );

@@ -75,7 +75,10 @@ export type WorkingToolName =
   | "manage_memory"
   | "manage_reminders"
   | "summarize_webpage"
-  | "convert_file";
+  | "convert_file"
+  | "open_disk_analyzer"
+  | "share_file_wifi"
+  | "clean_downloads";
 
 export type MascotState = "IDLE" | "THINKING" | "WORKING" | "SUCCESS" | "ERROR";
 

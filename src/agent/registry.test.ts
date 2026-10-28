@@ -5,7 +5,7 @@ import { createDefaultToolRegistry } from "./registry.ts";
 describe("ToolRegistry", () => {
   const registry = createDefaultToolRegistry();
 
-  it("registers all 10 core tools", () => {
+  it("registers all 13 core tools", () => {
     const expected = [
       "append_to_obsidian",
       "create_or_update_file",
@@ -17,6 +17,9 @@ describe("ToolRegistry", () => {
       "manage_reminders",
       "summarize_webpage",
       "convert_file",
+      "open_disk_analyzer",
+      "share_file_wifi",
+      "clean_downloads",
     ];
 
     for (const name of expected) {
@@ -160,12 +163,30 @@ describe("ToolRegistry", () => {
     }
   });
 
+  it("validates open_disk_analyzer, share_file_wifi, and clean_downloads arguments", () => {
+    const diskTool = registry.get("open_disk_analyzer")!;
+    const shareTool = registry.get("share_file_wifi")!;
+    const cleanTool = registry.get("clean_downloads")!;
+
+    const validDisk = diskTool.validateArgs({ path: "~/Projects" });
+    assert.equal(validDisk.ok, true);
+
+    const invalidShare = shareTool.validateArgs({ file_path: "" });
+    assert.equal(invalidShare.ok, false);
+
+    const validShare = shareTool.validateArgs({ file_path: "/home/user/doc.pdf" });
+    assert.equal(validShare.ok, true);
+
+    const validClean = cleanTool.validateArgs({ execute_cleanup: true });
+    assert.equal(validClean.ok, true);
+  });
+
   it("generates function declarations and prompt rules for all tools", () => {
     const decls = registry.getFunctionDeclarations();
-    assert.equal(decls.length, 10);
+    assert.equal(decls.length, 13);
 
     const rules = registry.getPromptRules();
-    assert.equal(rules.length, 10);
+    assert.equal(rules.length, 13);
     for (const rule of rules) {
       assert.ok(typeof rule === "string" && rule.length > 5);
     }

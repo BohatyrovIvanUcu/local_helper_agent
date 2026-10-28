@@ -4,12 +4,15 @@ pub mod audio;
 pub mod clipboard;
 pub mod config;
 pub mod converter;
+pub mod disk;
 pub mod display;
+pub mod downloads;
 pub mod files;
 pub mod media;
 pub mod memory;
 pub mod obsidian;
 pub mod reminders;
+pub mod share;
 pub mod voice;
 pub mod web;
 pub mod window;
@@ -134,7 +137,16 @@ pub fn run() {
             converter::convert_file,
             converter::open_file,
             converter::reveal_in_file_manager,
-            converter::get_available_conversion_formats
+            converter::get_available_conversion_formats,
+            disk::scan_disk_space,
+            disk::delete_disk_item,
+            disk::open_disk_analyzer_window,
+            share::start_file_share,
+            share::stop_file_share,
+            share::get_share_status,
+            share::open_share_window,
+            downloads::analyze_downloads,
+            downloads::execute_downloads_cleanup
         ])
         .run(tauri::generate_context!())
         .expect("Помилка запуску Tauri-застосунку");

@@ -29,6 +29,39 @@ pub async fn set_window_expanded(app: AppHandle, expanded: bool) -> Result<(), S
     Ok(())
 }
 
+/// Відкриває або фокусує окреме нативне вікно застосунку
+pub fn open_or_focus_window(
+    app: &AppHandle,
+    label: &str,
+    title: &str,
+    url: &str,
+    width: f64,
+    height: f64,
+    resizable: bool,
+) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window(label) {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+        return Ok(());
+    }
+
+    let win = tauri::WebviewWindowBuilder::new(
+        app,
+        label,
+        tauri::WebviewUrl::App(url.into()),
+    )
+    .title(title)
+    .inner_size(width, height)
+    .resizable(resizable)
+    .decorations(true)
+    .build()
+    .map_err(|e| format!("Помилка створення вікна {}: {}", label, e))?;
+
+    let _ = win.set_focus();
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 pub fn ensure_linux_window_interactive(window: &tauri::WebviewWindow) {
     use gtk::prelude::*;

@@ -6,6 +6,9 @@ import {
   detectDirectMediaCommand,
   detectDirectDisplayCommand,
   detectDirectConvertCommand,
+  detectDirectDiskCommand,
+  detectDirectShareCommand,
+  detectDirectDownloadsCommand,
   type ModelClient,
 } from "./orchestrator.ts";
 import { createDefaultToolRegistry } from "./registry.ts";
@@ -530,5 +533,95 @@ describe("runAgentTurn", () => {
       target_format: "gif",
       custom_output_path: null,
     });
+  });
+
+  it("detectDirectDiskCommand, detectDirectShareCommand, and detectDirectDownloadsCommand recognize requests", () => {
+    assert.deepEqual(detectDirectDiskCommand("що забило диск"), { path: "~" });
+    assert.deepEqual(detectDirectDiskCommand("відкрий wiztree"), { path: "~" });
+    assert.deepEqual(detectDirectDiskCommand("візуалізатор диска"), { path: "~" });
+    assert.equal(detectDirectDiskCommand("привіт маскот"), null);
+
+    assert.deepEqual(
+      detectDirectShareCommand("скинь на телефон", "/home/user/file.pdf"),
+      { filePath: "/home/user/file.pdf" }
+    );
+    assert.deepEqual(
+      detectDirectShareCommand("поділись по вайфаю", "/home/user/photos"),
+      { filePath: "/home/user/photos" }
+    );
+    assert.equal(detectDirectShareCommand("скинь на телефон", null), null);
+
+    assert.deepEqual(detectDirectDownloadsCommand("прибери завантаження"), {
+      action: "analyze",
+    });
+    assert.deepEqual(detectDirectDownloadsCommand("очисти downloads"), {
+      action: "analyze",
+    });
+    assert.equal(detectDirectDownloadsCommand("що чути"), null);
+  });
+
+  it("executes direct disk and share commands instantly without calling LLM", async () => {
+    let llmCalled = false;
+    const dummyClient: ModelClient = {
+      generateContent: async () => {
+        llmCalled = true;
+        throw new Error("Should not call LLM");
+      },
+    };
+
+    const invokedCommands: Array<{ cmd: string; args: unknown }> = [];
+
+    // Тест швидкого відкриття WizTree
+    const resDisk = await runAgentTurn({
+      modelClient: dummyClient,
+      modelName: "test-model",
+      systemInstruction: "System prompt",
+      userPrompt: "що забило диск",
+      toolRegistry: registry,
+      invoke: async <T>(cmd: string, args: unknown): Promise<T> => {
+        invokedCommands.push({ cmd, args });
+        return {} as unknown as T;
+      },
+      callbacks: {
+        onStateChange: () => {},
+      },
+    });
+
+    assert.equal(llmCalled, false);
+    assert.deepEqual(resDisk.executedTools, ["open_disk_analyzer"]);
+    assert.ok(resDisk.text.includes("WizTree"));
+
+    // Тест швидкої роздачі по Wi-Fi
+    const resShare = await runAgentTurn({
+      modelClient: dummyClient,
+      modelName: "test-model",
+      systemInstruction: "System prompt",
+      userPrompt: "скинь на телефон",
+      attachedFile: {
+        path: "/home/user/book.pdf",
+        name: "book.pdf",
+      },
+      toolRegistry: registry,
+      invoke: async <T>(cmd: string, args: unknown): Promise<T> => {
+        invokedCommands.push({ cmd, args });
+        if (cmd === "start_file_share") {
+          return {
+            share_url: "http://192.168.1.50:1422/",
+            file_name: "book.pdf",
+            file_size: 10240,
+            is_dir: false,
+          } as unknown as T;
+        }
+        return {} as unknown as T;
+      },
+      callbacks: {
+        onStateChange: () => {},
+      },
+    });
+
+    assert.equal(llmCalled, false);
+    assert.deepEqual(resShare.executedTools, ["share_file_wifi"]);
+    assert.ok(resShare.text.includes("book.pdf"));
+    assert.ok(resShare.text.includes("http://192.168.1.50:1422/"));
   });
 });

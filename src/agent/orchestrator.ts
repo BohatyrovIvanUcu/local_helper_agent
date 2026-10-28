@@ -426,6 +426,65 @@ export function detectDirectConvertCommand(
   return null;
 }
 
+export function detectDirectDiskCommand(
+  prompt: string
+): { path?: string } | null {
+  const raw = prompt.trim().toLowerCase().replace(/[!.?,;]+$/g, "").trim();
+  const clean = stripConversationalNoise(raw);
+
+  if (
+    /^(?:що\s+забило\s+диск|що\s+забило\s+пам['ʼ]?ять|покажи\s+диск|візуалізатор\s+диска|wiztree|аналізатор\s+диска|карта\s+диска|де\s+місце\s+на\s+диску|дисковий\s+простір|що\s+з\s+диском)$/iu.test(
+      clean
+    ) ||
+    /(?:відкрий|покажи|запусти|перевір)\s+(?:wiztree|аналізатор\s+диск|візуалізатор\s+диск|карту\s+диск|диск)/iu.test(
+      clean
+    )
+  ) {
+    return { path: "~" };
+  }
+  return null;
+}
+
+export function detectDirectShareCommand(
+  prompt: string,
+  attachedPath?: string | null
+): { filePath: string } | null {
+  if (!attachedPath) return null;
+  const raw = prompt.trim().toLowerCase().replace(/[!.?,;]+$/g, "").trim();
+  const clean = stripConversationalNoise(raw);
+
+  if (
+    /^(?:скинь\s+на\s+телефон|скинути\s+на\s+телефон|перекинь\s+на\s+телефон|на\s+телефон|поділись|поділися|share|роздай|роздати|по\s+вайфаю|по\s+wi-?fi|wifi\s+share)$/iu.test(
+      clean
+    ) ||
+    /(?:скинь|перекинь|відправ|надішли|поділись|поділися|роздай)\s+(?:це\s+|файл\s+|папку\s+)?(?:на\s+телефон|по\s+вайфаю|по\s+wi-?fi|через\s+qr|смартфон)/iu.test(
+      clean
+    )
+  ) {
+    return { filePath: attachedPath };
+  }
+  return null;
+}
+
+export function detectDirectDownloadsCommand(
+  prompt: string
+): { action: "analyze" } | null {
+  const raw = prompt.trim().toLowerCase().replace(/[!.?,;]+$/g, "").trim();
+  const clean = stripConversationalNoise(raw);
+
+  if (
+    /^(?:прибери\s+завантаження|прибрати\s+завантаження|почисти\s+завантаження|очисти\s+завантаження|прибери\s+downloads|очисти\s+downloads|наведи\s+лад\s+у\s+завантаженнях|порядок\s+в\s+downloads|розумне\s+прибирання)$/iu.test(
+      clean
+    ) ||
+    /(?:прибери|почисти|очисти|наведи\s+лад)\s+(?:в\s+|у\s+)?(?:завантаженнях|downloads)/iu.test(
+      clean
+    )
+  ) {
+    return { action: "analyze" };
+  }
+  return null;
+}
+
 export interface RunTurnOptions {
   modelClient: ModelClient;
   modelName: string;
@@ -601,6 +660,69 @@ export async function runAgentTurn(options: RunTurnOptions): Promise<TurnResult>
       return {
         text: `Помилка конвертації: ${msg}`,
         executedTools: ["convert_file"],
+      };
+    }
+  }
+
+  // Пряме відкриття візуалізатора диска WizTree без затримки на LLM
+  const directDisk = detectDirectDiskCommand(userPrompt);
+  if (directDisk && attachments.length === 0) {
+    callbacks.onStateChange("WORKING", "open_disk_analyzer");
+    try {
+      await invoke("open_disk_analyzer_window", {
+        path: directDisk.path || "~",
+      });
+      callbacks.onStateChange("SUCCESS");
+      const summary =
+        "Відкрив візуалізатор дискового простору WizTree! 🗺️ Тут ви можете побачити дерево папок, розширення та очистити важкі папки.";
+
+      return {
+        text: summary,
+        executedTools: ["open_disk_analyzer"],
+      };
+    } catch (err) {
+      callbacks.onStateChange("ERROR");
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        text: `Помилка відкриття WizTree: ${msg}`,
+        executedTools: ["open_disk_analyzer"],
+      };
+    }
+  }
+
+  // Пряма роздача файлу/папки по Wi-Fi при наявності прикріплення
+  const directShare = detectDirectShareCommand(
+    userPrompt,
+    options.attachedFile?.path
+  );
+  if (directShare) {
+    callbacks.onStateChange("WORKING", "share_file_wifi");
+    try {
+      interface ShareSessionResponse {
+        share_url: string;
+        file_name: string;
+        file_size: number;
+        is_dir: boolean;
+      }
+      const session = await invoke<ShareSessionResponse>("start_file_share", {
+        filePath: directShare.filePath,
+      });
+      await invoke("open_share_window", {
+        filePath: directShare.filePath,
+      });
+      callbacks.onStateChange("SUCCESS");
+      const summary = `Запустив Wi-Fi роздачу для «${session.file_name}»! 📲\nURL: ${session.share_url}\nВідкрито вікно з QR-кодом для легкого сканування телефоном.`;
+
+      return {
+        text: summary,
+        executedTools: ["share_file_wifi"],
+      };
+    } catch (err) {
+      callbacks.onStateChange("ERROR");
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        text: `Помилка запуску роздачі: ${msg}`,
+        executedTools: ["share_file_wifi"],
       };
     }
   }
