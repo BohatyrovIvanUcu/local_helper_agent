@@ -1,6 +1,6 @@
 [package]
 name = "local-helper-ai"
-version = "0.6.0"
+version = "0.6.1"
 description = "Desktop AI Mascot Assistant powered by Tauri v2 and Gemini API"
 authors = ["Ivan"]
 edition = "2021"

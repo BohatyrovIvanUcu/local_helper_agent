@@ -353,6 +353,20 @@ export function detectDirectConvertCommand(
     return { inputPath: attachedPath, targetFormat: "zip" };
   }
 
+  // Розархівація / розпакування: "розархівуй", "розпакуй", "видобудь", "unzip", "extract"
+  if (
+    /^(?:розархівуй|розархівувати|розпакуй|розпакувати|видобудь|видобути|unzip|extract|unarchive)$/iu.test(
+      clean
+    ) ||
+    /(?:розархівуй|розархівувати|розпакуй|розпакувати|видобудь|видобути|unzip|extract)\s+(?:це\s+|архів\s+|файл\s+|папку\s+)?/iu.test(
+      clean
+    ) ||
+    /(?:витягни|дістань)\s+(?:це\s+)?(?:з|із)\s+архів/iu.test(clean) ||
+    /^(?:в\s+папку|у\s+папку)$/iu.test(clean)
+  ) {
+    return { inputPath: attachedPath, targetFormat: "unzip" };
+  }
+
   // Специфічні фрази для перетворення в текст: "переведи в текст", "зроби txt", "в текст", "витягни текст"
   if (
     /^(?:текст|txt|text|у\s+текст|в\s+текст)$/iu.test(clean) ||
@@ -415,10 +429,19 @@ export function detectDirectConvertCommand(
       "tar.gz",
       "tar",
       "html",
+      "unzip",
+      "extract",
+      "unarchive",
     ];
     if (validFormats.includes(rawTarget)) {
       const finalTarget =
-        rawTarget === "text" ? "txt" : rawTarget === "markdown" ? "md" : rawTarget;
+        rawTarget === "text"
+          ? "txt"
+          : rawTarget === "markdown"
+          ? "md"
+          : rawTarget === "extract" || rawTarget === "unarchive"
+          ? "unzip"
+          : rawTarget;
       return { inputPath: attachedPath, targetFormat: finalTarget };
     }
   }
@@ -622,19 +645,23 @@ export async function runAgentTurn(options: RunTurnOptions): Promise<TurnResult>
 
       const sizeKb = (res.output_size_bytes / 1024).toFixed(1);
       const ext = directConvert.targetFormat.toLowerCase();
-      const badge =
-        ["mp3", "wav", "flac", "ogg", "aac", "m4a", "opus"].includes(ext)
-          ? "🎵"
-          : ["mp4", "webm", "mkv", "avi", "mov", "gif"].includes(ext)
-          ? "🎬"
-          : ["zip", "tar", "tar.gz"].includes(ext)
-          ? "📦"
-          : ["png", "jpg", "jpeg", "webp", "bmp", "ico"].includes(ext)
-          ? "🖼️"
-          : "📄";
+      const isExtract = ext === "unzip" || ext === "extract" || ext === "unarchive";
+      const badge = isExtract
+        ? "📂"
+        : ["mp3", "wav", "flac", "ogg", "aac", "m4a", "opus"].includes(ext)
+        ? "🎵"
+        : ["mp4", "webm", "mkv", "avi", "mov", "gif"].includes(ext)
+        ? "🎬"
+        : ["zip", "tar", "tar.gz"].includes(ext)
+        ? "📦"
+        : ["png", "jpg", "jpeg", "webp", "bmp", "ico"].includes(ext)
+        ? "🖼️"
+        : "📄";
 
       const encodedPath = encodeURIComponent(res.output_path);
-      const summary = `Готово! Створено ${res.output_filename} (${sizeKb} KB) ${badge} [Відкрити файл](action://open?path=${encodedPath}) • [У папці](action://reveal?path=${encodedPath})`;
+      const summary = isExtract
+        ? `Готово! Архів розпаковано у папку «${res.output_filename}» (${sizeKb} KB) 📂 [Відкрити папку](action://open?path=${encodedPath}) • [У файловому менеджері](action://reveal?path=${encodedPath})`
+        : `Готово! Створено ${res.output_filename} (${sizeKb} KB) ${badge} [Відкрити файл](action://open?path=${encodedPath}) • [У папці](action://reveal?path=${encodedPath})`;
 
       if (userPrompt.trim() && summary) {
         try {

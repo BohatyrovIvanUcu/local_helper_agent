@@ -175,8 +175,98 @@ pub enum ConversionCategory {
     ToMarkdown,
     TextNotesToPdf,
     ArchiveFolderOrFiles,
+    ExtractArchive,
     DocumentToPdf,
     Unknown,
+}
+
+pub fn is_archive_extension(ext: &str) -> bool {
+    let clean = ext.trim().trim_start_matches('.').to_lowercase();
+    matches!(
+        clean.as_str(),
+        "zip" | "tar" | "gz" | "tgz" | "bz2" | "tbz2" | "xz" | "txz" | "7z" | "rar" | "zst"
+    )
+}
+
+pub fn clean_archive_stem(filename: &str) -> String {
+    let lower = filename.to_lowercase();
+    let archive_exts = [
+        ".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst",
+        ".tgz", ".tbz2", ".txz",
+        ".zip", ".tar", ".7z", ".rar", ".gz", ".bz2", ".xz",
+    ];
+
+    for ext in archive_exts {
+        if lower.ends_with(ext) {
+            let cut_len = filename.len() - ext.len();
+            let res = &filename[..cut_len];
+            if !res.is_empty() {
+                return res.to_string();
+            }
+        }
+    }
+
+    Path::new(filename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(filename)
+        .to_string()
+}
+
+pub fn generate_unique_extract_dir(
+    source_path: &Path,
+    custom_name: Option<&str>,
+) -> Result<PathBuf, String> {
+    let parent_dir = source_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+
+    if let Some(custom) = custom_name {
+        let trimmed = custom.trim();
+        if !trimmed.is_empty() {
+            let custom_path = PathBuf::from(trimmed);
+            if custom_path.is_absolute() {
+                return Ok(custom_path);
+            } else {
+                return Ok(parent_dir.join(custom_path));
+            }
+        }
+    }
+
+    let file_name = source_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("extracted");
+
+    let stem = clean_archive_stem(file_name);
+    let first_attempt = parent_dir.join(&stem);
+    if !first_attempt.exists() {
+        return Ok(first_attempt);
+    }
+
+    for i in 1..1000 {
+        let candidate = parent_dir.join(format!("{}_{}", stem, i));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    Err("Не вдалося знайти вільне ім'я директорії для розпакування".to_string())
+}
+
+pub fn get_dir_size_recursive(path: &Path) -> u64 {
+    let mut total = 0;
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                total += get_dir_size_recursive(&p);
+            } else if let Ok(meta) = entry.metadata() {
+                total += meta.len();
+            }
+        }
+    }
+    total
 }
 
 pub fn detect_conversion_category(
@@ -186,6 +276,13 @@ pub fn detect_conversion_category(
 ) -> ConversionCategory {
     let src = src_ext.trim().trim_start_matches('.').to_lowercase();
     let tgt = target_ext.trim().trim_start_matches('.').to_lowercase();
+
+    let extract_targets = [
+        "unzip", "extract", "unarchive", "unpack", "folder", "dir", "extract_archive",
+    ];
+    if extract_targets.contains(&tgt.as_str()) || (is_archive_extension(&src) && extract_targets.contains(&tgt.as_str())) {
+        return ConversionCategory::ExtractArchive;
+    }
 
     if is_directory || tgt == "zip" || tgt == "tar.gz" || tgt == "tgz" || tgt == "tar" {
         return ConversionCategory::ArchiveFolderOrFiles;
@@ -287,11 +384,25 @@ pub async fn convert_file(
             return Err("Цільовий формат конвертації не вказано".to_string());
         }
 
-        let dest_path = generate_unique_target_path(
-            &source,
-            &target_ext_clean,
-            custom_output_path.as_deref(),
-        )?;
+        let is_extract = target_ext_clean == "unzip"
+            || target_ext_clean == "extract"
+            || target_ext_clean == "unarchive"
+            || target_ext_clean == "unpack"
+            || target_ext_clean == "folder"
+            || target_ext_clean == "dir"
+            || target_ext_clean == "extract_archive";
+
+        let category = detect_conversion_category(src_ext, &target_ext_clean, is_dir);
+
+        let dest_path = if is_extract || category == ConversionCategory::ExtractArchive {
+            generate_unique_extract_dir(&source, custom_output_path.as_deref())?
+        } else {
+            generate_unique_target_path(
+                &source,
+                &target_ext_clean,
+                custom_output_path.as_deref(),
+            )?
+        };
 
         if is_sensitive_path(&dest_path) {
             return Err(format!(
@@ -299,8 +410,6 @@ pub async fn convert_file(
                 dest_path.display()
             ));
         }
-
-        let category = detect_conversion_category(src_ext, &target_ext_clean, is_dir);
 
         let (engine_used, message) = match category {
             ConversionCategory::VideoToGif => {
@@ -635,6 +744,187 @@ except Exception as e:
                     }
 
                     ("Tar Archiver".to_string(), "Успішно запаковано у TAR-архів".to_string())
+                }
+            }
+
+            ConversionCategory::ExtractArchive => {
+                let src_lower = source.to_string_lossy().to_lowercase();
+                fs::create_dir_all(&dest_path)
+                    .map_err(|e| format!("Не вдалося створити директорію для розпакування: {}", e))?;
+
+                if src_lower.ends_with(".zip") {
+                    if is_command_available("unzip") {
+                        let output = Command::new("unzip")
+                            .args([
+                                "-q",
+                                "-o",
+                                source.to_str().unwrap_or_default(),
+                                "-d",
+                                dest_path.to_str().unwrap_or_default(),
+                            ])
+                            .output()
+                            .map_err(|e| format!("Помилка запуску unzip: {}", e))?;
+
+                        if !output.status.success() {
+                            let err_text = String::from_utf8_lossy(&output.stderr);
+                            return Err(format!("Помилка розархівації ZIP: {}", err_text.chars().take(400).collect::<String>()));
+                        }
+                        ("Unzip Extractor".to_string(), "Архів ZIP успішно розархівовано".to_string())
+                    } else if is_command_available("python3") {
+                        let output = Command::new("python3")
+                            .args([
+                                "-c",
+                                "import shutil, sys; shutil.unpack_archive(sys.argv[1], sys.argv[2], 'zip')",
+                                source.to_str().unwrap_or_default(),
+                                dest_path.to_str().unwrap_or_default(),
+                            ])
+                            .output()
+                            .map_err(|e| format!("Помилка запуску Python unpack: {}", e))?;
+
+                        if !output.status.success() {
+                            let err_text = String::from_utf8_lossy(&output.stderr);
+                            return Err(format!("Помилка розпакування ZIP через Python: {}", err_text.chars().take(400).collect::<String>()));
+                        }
+                        ("Python Zip Extractor".to_string(), "Архів ZIP успішно розархівовано".to_string())
+                    } else {
+                        return Err("Для розархівації ZIP потрібна утиліта unzip (`sudo apt install unzip`) або python3".to_string());
+                    }
+                } else if src_lower.ends_with(".tar.gz")
+                    || src_lower.ends_with(".tgz")
+                    || src_lower.ends_with(".tar.bz2")
+                    || src_lower.ends_with(".tbz2")
+                    || src_lower.ends_with(".tar.xz")
+                    || src_lower.ends_with(".txz")
+                    || src_lower.ends_with(".tar")
+                {
+                    if is_command_available("tar") {
+                        let output = Command::new("tar")
+                            .args([
+                                "-xf",
+                                source.to_str().unwrap_or_default(),
+                                "-C",
+                                dest_path.to_str().unwrap_or_default(),
+                            ])
+                            .output()
+                            .map_err(|e| format!("Помилка запуску tar: {}", e))?;
+
+                        if !output.status.success() {
+                            let err_text = String::from_utf8_lossy(&output.stderr);
+                            return Err(format!("Помилка розархівації TAR: {}", err_text.chars().take(400).collect::<String>()));
+                        }
+                        ("Tar Extractor".to_string(), "Архів успішно розархівовано".to_string())
+                    } else if is_command_available("python3") {
+                        let output = Command::new("python3")
+                            .args([
+                                "-c",
+                                "import shutil, sys; shutil.unpack_archive(sys.argv[1], sys.argv[2])",
+                                source.to_str().unwrap_or_default(),
+                                dest_path.to_str().unwrap_or_default(),
+                            ])
+                            .output()
+                            .map_err(|e| format!("Помилка розпакування TAR: {}", e))?;
+
+                        if !output.status.success() {
+                            let err_text = String::from_utf8_lossy(&output.stderr);
+                            return Err(format!("Помилка розпакування TAR через Python: {}", err_text.chars().take(400).collect::<String>()));
+                        }
+                        ("Python Tar Extractor".to_string(), "Архів успішно розархівовано".to_string())
+                    } else {
+                        return Err("Для розархівації потрібна утиліта tar або python3".to_string());
+                    }
+                } else if src_lower.ends_with(".7z") {
+                    if is_command_available("7z") {
+                        let output = Command::new("7z")
+                            .args([
+                                "x",
+                                "-y",
+                                &format!("-o{}", dest_path.to_str().unwrap_or_default()),
+                                source.to_str().unwrap_or_default(),
+                            ])
+                            .output()
+                            .map_err(|e| format!("Помилка запуску 7z: {}", e))?;
+
+                        if !output.status.success() {
+                            let err_text = String::from_utf8_lossy(&output.stderr);
+                            return Err(format!("Помилка розпакування 7z: {}", err_text.chars().take(400).collect::<String>()));
+                        }
+                        ("7-Zip Extractor".to_string(), "Архів .7z успішно розархівовано".to_string())
+                    } else if is_command_available("7za") {
+                        let output = Command::new("7za")
+                            .args([
+                                "x",
+                                "-y",
+                                &format!("-o{}", dest_path.to_str().unwrap_or_default()),
+                                source.to_str().unwrap_or_default(),
+                            ])
+                            .output()
+                            .map_err(|e| format!("Помилка запуску 7za: {}", e))?;
+
+                        if !output.status.success() {
+                            let err_text = String::from_utf8_lossy(&output.stderr);
+                            return Err(format!("Помилка розпакування 7za: {}", err_text.chars().take(400).collect::<String>()));
+                        }
+                        ("7-Zip Extractor".to_string(), "Архів .7z успішно розархівовано".to_string())
+                    } else {
+                        return Err("Для розпакування .7z потрібна утиліта p7zip (`sudo apt install p7zip-full`)".to_string());
+                    }
+                } else if src_lower.ends_with(".rar") {
+                    if is_command_available("unrar") {
+                        let output = Command::new("unrar")
+                            .args([
+                                "x",
+                                "-y",
+                                source.to_str().unwrap_or_default(),
+                                dest_path.to_str().unwrap_or_default(),
+                            ])
+                            .output()
+                            .map_err(|e| format!("Помилка запуску unrar: {}", e))?;
+
+                        if !output.status.success() {
+                            let err_text = String::from_utf8_lossy(&output.stderr);
+                            return Err(format!("Помилка unrar: {}", err_text.chars().take(400).collect::<String>()));
+                        }
+                        ("Unrar Extractor".to_string(), "Архів .rar успішно розархівовано".to_string())
+                    } else if is_command_available("7z") {
+                        let output = Command::new("7z")
+                            .args([
+                                "x",
+                                "-y",
+                                &format!("-o{}", dest_path.to_str().unwrap_or_default()),
+                                source.to_str().unwrap_or_default(),
+                            ])
+                            .output()
+                            .map_err(|e| format!("Помилка запуску 7z для RAR: {}", e))?;
+
+                        if !output.status.success() {
+                            let err_text = String::from_utf8_lossy(&output.stderr);
+                            return Err(format!("Помилка 7z: {}", err_text.chars().take(400).collect::<String>()));
+                        }
+                        ("7-Zip RAR Extractor".to_string(), "Архів .rar успішно розархівовано".to_string())
+                    } else {
+                        return Err("Для розпакування .rar потрібна утиліта unrar (`sudo apt install unrar`) або 7z".to_string());
+                    }
+                } else {
+                    // Універсальний фолбек через Python shutil
+                    if is_command_available("python3") {
+                        let output = Command::new("python3")
+                            .args([
+                                "-c",
+                                "import shutil, sys; shutil.unpack_archive(sys.argv[1], sys.argv[2])",
+                                source.to_str().unwrap_or_default(),
+                                dest_path.to_str().unwrap_or_default(),
+                            ])
+                            .output()
+                            .map_err(|e| format!("Помилка запуску Python unpack: {}", e))?;
+
+                        if !output.status.success() {
+                            let err_text = String::from_utf8_lossy(&output.stderr);
+                            return Err(format!("Не вдалося розпакувати архів: {}", err_text.chars().take(400).collect::<String>()));
+                        }
+                        ("Universal Archive Extractor".to_string(), "Архів успішно розархівовано".to_string())
+                    } else {
+                        return Err(format!("Невідомий формат архіву для розпакування: {}", source.display()));
+                    }
                 }
             }
 
@@ -973,11 +1263,13 @@ except Exception as e:
             }
         };
 
-        let output_size = fs::metadata(&dest_path)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let (output_size, is_result_dir) = if dest_path.is_dir() {
+            (get_dir_size_recursive(&dest_path), true)
+        } else {
+            (fs::metadata(&dest_path).map(|m| m.len()).unwrap_or(0), false)
+        };
 
-        if output_size == 0 {
+        if !is_result_dir && output_size == 0 {
             let _ = fs::remove_file(&dest_path);
             let is_pdf = src_ext.eq_ignore_ascii_case("pdf");
             if is_pdf {
@@ -1226,6 +1518,34 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_conversion_category_extract_archive() {
+        assert_eq!(
+            detect_conversion_category("zip", "unzip", false),
+            ConversionCategory::ExtractArchive
+        );
+        assert_eq!(
+            detect_conversion_category("tar.gz", "extract", false),
+            ConversionCategory::ExtractArchive
+        );
+        assert_eq!(
+            detect_conversion_category("7z", "folder", false),
+            ConversionCategory::ExtractArchive
+        );
+        assert_eq!(
+            detect_conversion_category("rar", "unpack", false),
+            ConversionCategory::ExtractArchive
+        );
+    }
+
+    #[test]
+    fn test_clean_archive_stem() {
+        assert_eq!(clean_archive_stem("my_photos.zip"), "my_photos");
+        assert_eq!(clean_archive_stem("project_backup.tar.gz"), "project_backup");
+        assert_eq!(clean_archive_stem("docs.7z"), "docs");
+        assert_eq!(clean_archive_stem("plain_folder"), "plain_folder");
+    }
+
+    #[test]
     fn test_generate_unique_target_path_basic() {
         let dummy = Path::new("/tmp/test_converter_sample_file_12345.mp4");
         let result = generate_unique_target_path(dummy, "gif", None).unwrap();
@@ -1330,6 +1650,43 @@ mod tests {
             assert!(conv.success);
             assert!(Path::new(&conv.output_path).exists());
             let _ = fs::remove_file(&conv.output_path);
+        }
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_extract_zip_archive() {
+        let temp_dir = std::env::temp_dir().join(format!("test_extract_zip_{}", std::process::id()));
+        let _ = fs::create_dir_all(&temp_dir);
+        let sample_file = temp_dir.join("inner.txt");
+        let _ = fs::write(&sample_file, "Inner content to extract");
+
+        let zip_res = tauri::async_runtime::block_on(convert_file(
+            temp_dir.to_string_lossy().to_string(),
+            "zip".to_string(),
+            None,
+        ));
+
+        if is_command_available("zip") && (is_command_available("unzip") || is_command_available("python3")) {
+            assert!(zip_res.is_ok(), "Expected zip to succeed: {:?}", zip_res);
+            let zip_conv = zip_res.unwrap();
+            let zip_path = zip_conv.output_path;
+
+            let extract_res = tauri::async_runtime::block_on(convert_file(
+                zip_path.clone(),
+                "unzip".to_string(),
+                None,
+            ));
+
+            assert!(extract_res.is_ok(), "Expected extract to succeed: {:?}", extract_res);
+            let extract_conv = extract_res.unwrap();
+            assert!(extract_conv.success);
+            let extracted_dir = Path::new(&extract_conv.output_path);
+            assert!(extracted_dir.is_dir());
+
+            let _ = fs::remove_file(&zip_path);
+            let _ = fs::remove_dir_all(&extracted_dir);
         }
 
         let _ = fs::remove_dir_all(&temp_dir);

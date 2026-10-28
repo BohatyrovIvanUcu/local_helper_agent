@@ -483,6 +483,27 @@ describe("runAgentTurn", () => {
         targetFormat: "md",
       }
     );
+    assert.deepEqual(
+      detectDirectConvertCommand("розархівуй", "/home/user/archive.zip"),
+      {
+        inputPath: "/home/user/archive.zip",
+        targetFormat: "unzip",
+      }
+    );
+    assert.deepEqual(
+      detectDirectConvertCommand("розпакуй цей архів", "/home/user/bundle.tar.gz"),
+      {
+        inputPath: "/home/user/bundle.tar.gz",
+        targetFormat: "unzip",
+      }
+    );
+    assert.deepEqual(
+      detectDirectConvertCommand("видобудь", "/home/user/files.7z"),
+      {
+        inputPath: "/home/user/files.7z",
+        targetFormat: "unzip",
+      }
+    );
     assert.equal(detectDirectConvertCommand("що в цьому файлі?", "/home/user/doc.pdf"), null);
     assert.equal(detectDirectConvertCommand("зроби gif", null), null);
   });
