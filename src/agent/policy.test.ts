@@ -103,6 +103,13 @@ describe("SafetyPolicy", () => {
       taintedCtx
     );
     assert.equal(resNote.decision, "confirm");
+
+    const resManageObsidian = evaluatePolicy(
+      "manage_obsidian",
+      { action: "create", filename: "Injected.md", content: "malicious" },
+      taintedCtx
+    );
+    assert.equal(resManageObsidian.decision, "confirm");
   });
 
   it("allows safe desktop applications and detached launches without confirmation", () => {

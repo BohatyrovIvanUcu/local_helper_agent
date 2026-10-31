@@ -231,6 +231,7 @@ export function evaluatePolicy(
       toolName === "run_cli_command" ||
       toolName === "create_or_update_file" ||
       toolName === "append_to_obsidian" ||
+      toolName === "manage_obsidian" ||
       toolName === "manage_memory"
     ) {
       const details =
@@ -240,6 +241,8 @@ export function evaluatePolicy(
           ? String(args.filepath ?? "")
           : toolName === "append_to_obsidian"
           ? String(args.content ?? "")
+          : toolName === "manage_obsidian"
+          ? `[${args.action ?? "action"}] ${args.filename ?? args.query ?? args.content ?? ""}`
           : String(args.fact ?? "");
 
       return {
@@ -359,6 +362,14 @@ export function evaluatePolicy(
 
       // Керування яскравістю та нічним режимом (brightnessctl, light, xrandr, gammastep тощо)
       if (DISPLAY_CONTROL_COMMANDS.has(baseBin)) {
+        continue;
+      }
+
+      // Блокування екрана системи (loginctl lock-session, xdg-screensaver lock)
+      if (
+        (baseBin === "loginctl" && tokens[1]?.toLowerCase() === "lock-session") ||
+        (baseBin === "xdg-screensaver" && tokens[1]?.toLowerCase() === "lock")
+      ) {
         continue;
       }
 
@@ -499,7 +510,20 @@ export function evaluatePolicy(
     return { decision: "allow" };
   }
 
-  // 5. Інші стандартні інструменти
+  // 5. manage_obsidian
+  if (toolName === "manage_obsidian") {
+    const rawFile = String(args.filename ?? "");
+    const rawSub = String(args.subfolder ?? "");
+    if (isSensitivePath(rawFile) || isSensitivePath(rawSub)) {
+      return {
+        decision: "deny",
+        reason: "Заборонено звернення до системних або конфіденційних шляхів через Obsidian.",
+      };
+    }
+    return { decision: "allow" };
+  }
+
+  // 6. Інші стандартні інструменти
   return { decision: "allow" };
 }
 

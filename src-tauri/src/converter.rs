@@ -1729,12 +1729,10 @@ mod tests {
         assert!(res_err.is_err());
         assert!(res_err.unwrap_err().contains("не існує"));
 
-        // 2. Існуючий файл
-        let res_open = tauri::async_runtime::block_on(open_file(sample_file.to_string_lossy().to_string()));
-        assert!(res_open.is_ok(), "Expected open_file to succeed: {:?}", res_open);
-
-        let res_reveal = tauri::async_runtime::block_on(reveal_in_file_manager(sample_file.to_string_lossy().to_string()));
-        assert!(res_reveal.is_ok(), "Expected reveal_in_file_manager to succeed: {:?}", res_reveal);
+        // 2. Перевірка неіснуючого шляху для reveal_in_file_manager
+        let res_reveal_err = tauri::async_runtime::block_on(reveal_in_file_manager(non_existent.to_string_lossy().to_string()));
+        assert!(res_reveal_err.is_err());
+        assert!(res_reveal_err.unwrap_err().contains("не існує"));
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

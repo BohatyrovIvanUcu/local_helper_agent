@@ -24,7 +24,7 @@ export const displayTool: ToolSpec<DisplayToolArgs> = {
         action: {
           type: Type.STRING,
           description:
-            "Дія для керування екраном: 'set_brightness', 'increase_brightness', 'decrease_brightness', 'get_brightness', 'enable_night_light', 'disable_night_light', 'toggle_night_light', 'get_night_light', 'set_night_light_temp'.",
+            "Дія для керування екраном: 'lock_screen' (блокування системи та пауза музики при відході), 'set_brightness', 'increase_brightness', 'decrease_brightness', 'get_brightness', 'enable_night_light', 'disable_night_light', 'toggle_night_light', 'get_night_light', 'set_night_light_temp'.",
         },
         value: {
           type: Type.INTEGER,
@@ -46,7 +46,7 @@ export const displayTool: ToolSpec<DisplayToolArgs> = {
     },
   },
   promptRule:
-    "control_display: керування яскравістю дисплея та нічним режимом (теплим світлом). Коли користувач просить 'зроби яскравіше/темніше', 'яскравість 50%', 'увімкни нічний режим/тепле світло', 'яка зараз яскравість' — ЗАВЖДИ викликай control_display з відповідною дією.",
+    "control_display: керування яскравістю дисплея, нічним режимом (теплим світлом) та блокуванням екрана. Коли користувач просить 'зроби яскравіше/темніше', 'яскравість 50%', 'увімкни нічний режим', 'я відійшов', 'заблокуй екран/комп' — ЗАВЖДИ викликай control_display з відповідною дією.",
   validateArgs: (raw) => {
     const rawAction = raw.action ?? "get_brightness";
     const action = typeof rawAction === "string" ? rawAction.trim() : "get_brightness";

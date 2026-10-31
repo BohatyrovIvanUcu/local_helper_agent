@@ -67,6 +67,7 @@ export interface ToolSpec<TArgs = Record<string, unknown>> {
 
 export type WorkingToolName =
   | "append_to_obsidian"
+  | "manage_obsidian"
   | "create_or_update_file"
   | "read_file_or_dir"
   | "run_cli_command"
@@ -78,7 +79,8 @@ export type WorkingToolName =
   | "convert_file"
   | "open_disk_analyzer"
   | "share_file_wifi"
-  | "clean_downloads";
+  | "clean_downloads"
+  | "manage_session_presets";
 
 export type MascotState = "IDLE" | "THINKING" | "WORKING" | "SUCCESS" | "ERROR";
 

@@ -264,96 +264,204 @@ fn generate_landing_html(
     )
 }
 
-/// Запускає безпечний публічний HTTPS-тунель через Tunnelmole
-fn spawn_tunnel(port: u16) -> (Option<String>, Option<std::process::Child>) {
-    let local_tmole_path = expand_tilde("~/local_helper_ai/node_modules/tunnelmole/dist/bin/tunnelmole.js")
-        .unwrap_or_else(|_| PathBuf::from("./node_modules/tunnelmole/dist/bin/tunnelmole.js"));
-
-    let mut cmd = if Path::new("./node_modules/tunnelmole/dist/bin/tunnelmole.js").exists() {
-        let mut c = Command::new("node");
-        c.arg("./node_modules/tunnelmole/dist/bin/tunnelmole.js").arg(port.to_string());
-        c
-    } else if local_tmole_path.exists() {
-        let mut c = Command::new("node");
-        c.arg(local_tmole_path).arg(port.to_string());
-        c
-    } else if let Ok(out) = Command::new("which").arg("tmole").output() {
-        if out.status.success() {
-            let mut c = Command::new("tmole");
-            c.arg(port.to_string());
-            c
-        } else {
-            let mut c = Command::new("npx");
-            c.args(["--yes", "tunnelmole", &port.to_string()]);
-            c
+/// Витягує валідне публічне HTTPS-посилання з рядка виводу тунельної утиліти
+pub fn extract_tunnel_url(line: &str) -> Option<String> {
+    if let Some(start_idx) = line.find("https://") {
+        let sub = &line[start_idx..];
+        let end_idx = sub
+            .find(|c: char| c.is_whitespace() || c == '⟶' || c == ',' || c == '"' || c == '\'')
+            .unwrap_or(sub.len());
+        let candidate = sub[..end_idx]
+            .trim()
+            .trim_end_matches(',')
+            .trim_end_matches('.')
+            .to_string();
+        if candidate.contains(".lhr.life")
+            || candidate.contains(".trycloudflare.com")
+            || candidate.contains(".tunnelmole.net")
+            || candidate.contains(".loca.lt")
+        {
+            return Some(candidate);
         }
-    } else {
-        let mut c = Command::new("npx");
-        c.args(["--yes", "tunnelmole", &port.to_string()]);
-        c
-    };
+    }
+    None
+}
 
+/// Виконує процес тунелювання та очікує на отримання HTTPS URL протягом вказаного таймауту
+fn run_tunnel_process(
+    mut cmd: Command,
+    timeout: Duration,
+) -> (Option<String>, Option<std::process::Child>) {
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[Wi-Fi Share Tunnel] Не вдалося запустити тунель: {}", e);
+            eprintln!("[Wi-Fi Share Tunnel] Не вдалося запустити команду тунелю: {}", e);
             return (None, None);
         }
     };
 
-    let stdout = match child.stdout.take() {
-        Some(s) => s,
-        None => return (None, Some(child)),
-    };
+    let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
     let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        let mut sent = false;
-        for line in reader.lines() {
-            if let Ok(l) = line {
-                eprintln!("[Wi-Fi Share Tunnel OUT] {}", l);
-                if !sent {
-                    if let Some(start_idx) = l.find("https://") {
-                        let sub = &l[start_idx..];
-                        let end_idx = sub
-                            .find(|c: char| c.is_whitespace() || c == '⟶')
-                            .unwrap_or(sub.len());
-                        let url = sub[..end_idx].trim().to_string();
-                        if url.contains(".tunnelmole.net") || url.contains(".loca.lt") {
-                            let _ = tx.send(url);
-                            sent = true;
-                        }
-                    }
-                }
-            }
-        }
-        eprintln!("[Wi-Fi Share Tunnel OUT] stdout closed (child exited)");
-    });
+    let tx_err = tx.clone();
 
-    if let Some(err_stream) = stderr {
+    if let Some(s) = stdout {
         std::thread::spawn(move || {
-            let reader = BufReader::new(err_stream);
-            for line in reader.lines() {
-                if let Ok(l) = line {
-                    eprintln!("[Wi-Fi Share Tunnel ERR] {}", l);
+            let reader = BufReader::new(s);
+            for line in reader.lines().flatten() {
+                eprintln!("[Wi-Fi Share Tunnel OUT] {}", line);
+                if let Some(url) = extract_tunnel_url(&line) {
+                    let _ = tx.send(url);
+                    break;
                 }
             }
-            eprintln!("[Wi-Fi Share Tunnel ERR] stderr closed");
         });
     }
 
-    let tunnel_url = rx.recv_timeout(Duration::from_millis(3500)).ok();
-    if let Some(ref u) = tunnel_url {
-        eprintln!("[Wi-Fi Share Tunnel] Успішно піднято HTTPS-тунель: {}", u);
-    } else {
-        eprintln!("[Wi-Fi Share Tunnel] Тунель не відповів за 3.5с, використовуємо локальну LAN адресу");
+    if let Some(e) = stderr {
+        std::thread::spawn(move || {
+            let reader = BufReader::new(e);
+            for line in reader.lines().flatten() {
+                eprintln!("[Wi-Fi Share Tunnel ERR] {}", line);
+                if let Some(url) = extract_tunnel_url(&line) {
+                    let _ = tx_err.send(url);
+                    break;
+                }
+            }
+        });
     }
-    (tunnel_url, Some(child))
+
+    match rx.recv_timeout(timeout) {
+        Ok(url) => {
+            eprintln!("[Wi-Fi Share Tunnel] Успішно піднято HTTPS-тунель: {}", url);
+            (Some(url), Some(child))
+        }
+        Err(_) => {
+            eprintln!(
+                "[Wi-Fi Share Tunnel] Тунель не повернув URL за {:?}, зупиняємо процес",
+                timeout
+            );
+            let _ = child.kill();
+            let _ = child.wait();
+            (None, None)
+        }
+    }
+}
+
+/// Запускає безпечний публічний HTTPS-тунель (SSH localhost.run -> Cloudflare -> Tunnelmole/NVM)
+fn spawn_tunnel(port: u16) -> (Option<String>, Option<std::process::Child>) {
+    // 1. Спроба через нативний SSH-тунель localhost.run (працює скрізь без залежностей)
+    let ssh_path = if Path::new("/usr/bin/ssh").exists() {
+        "/usr/bin/ssh"
+    } else {
+        "ssh"
+    };
+
+    let mut ssh_cmd = Command::new(ssh_path);
+    ssh_cmd.args([
+        "-R",
+        &format!("80:localhost:{}", port),
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        "LogLevel=ERROR",
+        "-o",
+        "ServerAliveInterval=30",
+        "nokey@localhost.run",
+    ]);
+
+    let (ssh_url, ssh_child) = run_tunnel_process(ssh_cmd, Duration::from_millis(4000));
+    if ssh_url.is_some() {
+        return (ssh_url, ssh_child);
+    }
+
+    // 2. Спроба через cloudflared (якщо встановлено у системі або ~/.local/bin)
+    let cf_paths = [
+        "cloudflared",
+        "/usr/local/bin/cloudflared",
+        "/usr/bin/cloudflared",
+    ];
+    let mut cloudflared_bin = None;
+    for p in cf_paths {
+        if Path::new(p).exists()
+            || Command::new("which")
+                .arg(p)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        {
+            cloudflared_bin = Some(p.to_string());
+            break;
+        }
+    }
+    if cloudflared_bin.is_none() {
+        if let Ok(user_home_cf) = expand_tilde("~/.local/bin/cloudflared") {
+            if user_home_cf.exists() {
+                cloudflared_bin = Some(user_home_cf.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    if let Some(cf) = cloudflared_bin {
+        let mut cf_cmd = Command::new(cf);
+        cf_cmd.args(["tunnel", "--url", &format!("http://127.0.0.1:{}", port)]);
+        let (cf_url, cf_child) = run_tunnel_process(cf_cmd, Duration::from_millis(4000));
+        if cf_url.is_some() {
+            return (cf_url, cf_child);
+        }
+    }
+
+    // 3. Спроба через Tunnelmole (перевіряємо node в PATH, ~/.nvm тощо)
+    let mut node_bin = None;
+    if Command::new("node")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        node_bin = Some("node".to_string());
+    } else if let Ok(home) = expand_tilde("~/.nvm/versions/node") {
+        if let Ok(entries) = fs::read_dir(home) {
+            for entry in entries.flatten() {
+                let candidate = entry.path().join("bin/node");
+                if candidate.exists() {
+                    node_bin = Some(candidate.to_string_lossy().to_string());
+                    break;
+                }
+            }
+        }
+    }
+
+    if let Some(node) = node_bin {
+        let local_tmole_path = expand_tilde("~/local_helper_ai/node_modules/tunnelmole/dist/bin/tunnelmole.js")
+            .unwrap_or_else(|_| PathBuf::from("./node_modules/tunnelmole/dist/bin/tunnelmole.js"));
+
+        let script_path = if Path::new("./node_modules/tunnelmole/dist/bin/tunnelmole.js").exists() {
+            Some(PathBuf::from("./node_modules/tunnelmole/dist/bin/tunnelmole.js"))
+        } else if local_tmole_path.exists() {
+            Some(local_tmole_path)
+        } else {
+            None
+        };
+
+        if let Some(script) = script_path {
+            let mut tm_cmd = Command::new(node);
+            tm_cmd.arg(script).arg(port.to_string());
+            let (tm_url, tm_child) = run_tunnel_process(tm_cmd, Duration::from_millis(4000));
+            if tm_url.is_some() {
+                return (tm_url, tm_child);
+            }
+        }
+    }
+
+    eprintln!("[Wi-Fi Share Tunnel] Жоден публічний HTTPS-тунель не відповів, використовуємо локальну LAN адресу");
+    (None, None)
 }
 
 /// Запускає локальний HTTP сервер для роздачі файлу
@@ -813,6 +921,30 @@ mod tests {
         assert!(html.contains("10.5 MB"));
         assert!(html.contains("href=\"/download\""));
         assert!(html.contains("<video controls src=\"/preview\"></video>"));
+    }
+
+    #[test]
+    fn test_extract_tunnel_url() {
+        let lhr_line = "849762cbb943d1.lhr.life tunneled with tls termination, https://849762cbb943d1.lhr.life";
+        assert_eq!(
+            extract_tunnel_url(lhr_line),
+            Some("https://849762cbb943d1.lhr.life".to_string())
+        );
+
+        let cf_line = "2026-10-28 INF | Your quick Tunnel: https://sample-domain.trycloudflare.com";
+        assert_eq!(
+            extract_tunnel_url(cf_line),
+            Some("https://sample-domain.trycloudflare.com".to_string())
+        );
+
+        let tm_line = "https://3a6h0x.tunnelmole.net ⟶   http://localhost:1422";
+        assert_eq!(
+            extract_tunnel_url(tm_line),
+            Some("https://3a6h0x.tunnelmole.net".to_string())
+        );
+
+        let invalid_line = "Just some text without tunnel url";
+        assert_eq!(extract_tunnel_url(invalid_line), None);
     }
 }
 

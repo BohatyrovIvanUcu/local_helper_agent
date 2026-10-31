@@ -74,6 +74,7 @@ function playNotificationChime() {
 
 const TOOL_LABELS: Record<WorkingToolName, string> = {
   append_to_obsidian: "Записую в Obsidian...",
+  manage_obsidian: "Працюю з Obsidian 📓...",
   create_or_update_file: "Майструю файл...",
   read_file_or_dir: "Вивчаю креслення й файли...",
   run_cli_command: "Виконую команду...",
@@ -86,6 +87,7 @@ const TOOL_LABELS: Record<WorkingToolName, string> = {
   open_disk_analyzer: "Відкриваю WizTree... 🗺️",
   share_file_wifi: "Піднімаю Wi-Fi роздачу... 📲",
   clean_downloads: "Аналізую завантаження... 🧹",
+  manage_session_presets: "Керую робочим стеком 📑...",
 };
 
 interface ClipboardImagePayload {
@@ -187,6 +189,7 @@ function getMascotSprite(
       if (
         activeTool === "read_file_or_dir" ||
         activeTool === "append_to_obsidian" ||
+        activeTool === "manage_obsidian" ||
         activeTool === "summarize_webpage"
       ) {
         return "/mascot/working-blueprint.png";

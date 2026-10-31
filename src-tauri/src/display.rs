@@ -1,6 +1,8 @@
 // Модуль для керування яскравістю екрана та нічним режимом (Night Light / тепле світло)
 // Підтримує GNOME Wayland/X11 (Mutter D-Bus, gsettings), brightnessctl, light, gammastep, xrandr, Windows WMI, macOS.
 
+use std::process::{Command, Stdio};
+
 pub fn parse_busctl_val(text: &str, key: &str) -> Option<i64> {
     let key_pat = format!("\"{}\" i ", key);
     if let Some(pos) = text.find(&key_pat) {
@@ -343,6 +345,111 @@ pub fn set_night_light(enable: bool, temp: Option<u32>) -> Result<String, String
     Err("Не вдалося налаштувати нічний режим (підтримується GNOME, gammastep або redshift)".to_string())
 }
 
+/// Виконує системне блокування сесії (Linux loginctl/xdg-screensaver, Windows, macOS).
+pub fn execute_lock_screen() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        // 1. loginctl lock-session (стандарт для systemd / Wayland / GNOME / KDE)
+        if let Ok(mut child) = Command::new("loginctl")
+            .arg("lock-session")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            if let Ok(Some(status)) = child.try_wait() {
+                if status.success() {
+                    return Ok(());
+                }
+            } else {
+                return Ok(());
+            }
+        }
+
+        // 2. xdg-screensaver lock
+        if let Ok(mut child) = Command::new("xdg-screensaver")
+            .arg("lock")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            if let Ok(Some(status)) = child.try_wait() {
+                if status.success() {
+                    return Ok(());
+                }
+            } else {
+                return Ok(());
+            }
+        }
+
+        // 3. GNOME ScreenSaver D-Bus
+        let _ = Command::new("busctl")
+            .args([
+                "--user",
+                "call",
+                "org.gnome.ScreenSaver",
+                "/org/gnome/ScreenSaver",
+                "org.gnome.ScreenSaver",
+                "Lock",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let status = Command::new("rundll32.exe")
+            .args(["user32.dll,LockWorkStation"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+
+        if status.map(|s| s.success()).unwrap_or(false) {
+            return Ok(());
+        }
+        return Err("Не вдалося заблокувати Windows станцію".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let status = Command::new("pmset")
+            .arg("displaysleepnow")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+
+        if status.map(|s| s.success()).unwrap_or(false) {
+            return Ok(());
+        }
+        return Err("Не вдалося заблокувати екран macOS".to_string());
+    }
+
+    #[allow(unreachable_code)]
+    Ok(())
+}
+
+/// Команда блокування екрана та призупинення медіа («Kill Switch / Я відійшов»)
+#[tauri::command]
+pub async fn lock_screen() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::media::pause_media_player();
+        #[cfg(not(test))]
+        {
+            execute_lock_screen()?;
+        }
+        Ok("Музику поставлено на паузу, екран заблоковано 🔒. Гарного відпочинку!".to_string())
+    })
+    .await
+    .map_err(|e| format!("Помилка блокування екрана: {}", e))?
+}
+
 #[tauri::command]
 pub async fn control_display(
     action: String,
@@ -353,6 +460,14 @@ pub async fn control_display(
     tauri::async_runtime::spawn_blocking(move || {
         let act = action.trim().to_lowercase();
         match act.as_str() {
+            "lock_screen" | "lock" => {
+                crate::media::pause_media_player();
+                #[cfg(not(test))]
+                {
+                    execute_lock_screen()?;
+                }
+                Ok("Музику поставлено на паузу, екран заблоковано 🔒. Гарного відпочинку!".to_string())
+            }
             "get_brightness" => {
                 let cur = get_screen_brightness()?;
                 Ok(format!("Поточна яскравість екрана: {}% 🔆", cur))
@@ -424,6 +539,22 @@ mod tests {
         assert_eq!(parse_busctl_val(sample, "min"), Some(960));
         assert_eq!(parse_busctl_val(sample, "max"), Some(96000));
         assert_eq!(parse_busctl_val(sample, "value"), Some(29472));
+    }
+
+    #[test]
+    fn test_control_display_lock_screen() {
+        let res = tauri::async_runtime::block_on(control_display(
+            "lock_screen".to_string(),
+            None,
+            None,
+            None,
+        ));
+        assert!(res.is_ok());
+        assert!(res.unwrap().contains("заблоковано"));
+
+        let res_lock = tauri::async_runtime::block_on(lock_screen());
+        assert!(res_lock.is_ok());
+        assert!(res_lock.unwrap().contains("заблоковано"));
     }
 }
 

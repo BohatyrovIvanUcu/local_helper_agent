@@ -9,6 +9,7 @@ import {
   detectDirectDiskCommand,
   detectDirectShareCommand,
   detectDirectDownloadsCommand,
+  detectDirectPresetCommand,
   type ModelClient,
 } from "./orchestrator.ts";
 import { createDefaultToolRegistry } from "./registry.ts";
@@ -386,6 +387,24 @@ describe("runAgentTurn", () => {
       action: "increase_brightness",
       value: 10,
     });
+    assert.deepEqual(detectDirectDisplayCommand("я відійшов"), {
+      action: "lock_screen",
+    });
+    assert.deepEqual(detectDirectDisplayCommand("відійшов"), {
+      action: "lock_screen",
+    });
+    assert.deepEqual(detectDirectDisplayCommand("заблокуй екран"), {
+      action: "lock_screen",
+    });
+    assert.deepEqual(detectDirectDisplayCommand("lock screen"), {
+      action: "lock_screen",
+    });
+    assert.deepEqual(detectDirectDisplayCommand("kill switch"), {
+      action: "lock_screen",
+    });
+    assert.deepEqual(detectDirectDisplayCommand("я пішов"), {
+      action: "lock_screen",
+    });
     assert.equal(detectDirectDisplayCommand("розкажи анекдот"), null);
   });
 
@@ -567,8 +586,20 @@ describe("runAgentTurn", () => {
       { filePath: "/home/user/file.pdf" }
     );
     assert.deepEqual(
+      detectDirectShareCommand("кинь на телефон", "/home/user/file.pdf"),
+      { filePath: "/home/user/file.pdf" }
+    );
+    assert.deepEqual(
+      detectDirectShareCommand("закинь на телефон", "/home/user/file.pdf"),
+      { filePath: "/home/user/file.pdf" }
+    );
+    assert.deepEqual(
       detectDirectShareCommand("поділись по вайфаю", "/home/user/photos"),
       { filePath: "/home/user/photos" }
+    );
+    assert.deepEqual(
+      detectDirectShareCommand("кинь на телефон /home/user/doc.pdf", null),
+      { filePath: "/home/user/doc.pdf" }
     );
     assert.equal(detectDirectShareCommand("скинь на телефон", null), null);
 
@@ -644,5 +675,101 @@ describe("runAgentTurn", () => {
     assert.deepEqual(resShare.executedTools, ["share_file_wifi"]);
     assert.ok(resShare.text.includes("book.pdf"));
     assert.ok(resShare.text.includes("http://192.168.1.50:1422/"));
+  });
+
+  it("detectDirectPresetCommand correctly parses open, save, close, list commands", () => {
+    assert.deepEqual(detectDirectPresetCommand("відкрий навчання"), {
+      action: "open",
+      name: "study",
+    });
+    assert.deepEqual(detectDirectPresetCommand("стек навчання"), {
+      action: "open",
+      name: "study",
+    });
+    assert.deepEqual(detectDirectPresetCommand("навчання"), {
+      action: "open",
+      name: "study",
+    });
+    assert.deepEqual(detectDirectPresetCommand("відкрий робочий стек"), {
+      action: "open",
+      name: "work",
+    });
+    assert.deepEqual(detectDirectPresetCommand("робочий стек"), {
+      action: "open",
+      name: "work",
+    });
+    assert.deepEqual(detectDirectPresetCommand("відкрий пресет дизайн"), {
+      action: "open",
+      name: "дизайн",
+    });
+
+    assert.deepEqual(
+      detectDirectPresetCommand("збережи поточний стек як робота"),
+      {
+        action: "save",
+        name: "робота",
+      }
+    );
+    assert.deepEqual(detectDirectPresetCommand("збережи сесію як крипта"), {
+      action: "save",
+      name: "крипта",
+    });
+
+    assert.deepEqual(detectDirectPresetCommand("закрий усе для навчання"), {
+      action: "close",
+      name: "study",
+    });
+    assert.deepEqual(detectDirectPresetCommand("закрий робочий стек"), {
+      action: "close",
+      name: "work",
+    });
+
+    assert.deepEqual(detectDirectPresetCommand("покажи мої пресети"), {
+      action: "list",
+    });
+    assert.deepEqual(detectDirectPresetCommand("які є пресети"), {
+      action: "list",
+    });
+  });
+
+  it("runs fast-path for session presets without calling LLM", async () => {
+    let llmCalled = false;
+    const fakeClient: ModelClient = {
+      generateContent: async () => {
+        llmCalled = true;
+        return { text: "LLM output" };
+      },
+    };
+
+    const invokedCommands: Array<{ cmd: string; args: unknown }> = [];
+    const res = await runAgentTurn({
+      modelClient: fakeClient,
+      modelName: "test-model",
+      systemInstruction: "System prompt",
+      userPrompt: "відкрий навчання",
+      toolRegistry: registry,
+      invoke: async <T>(cmd: string, args: unknown): Promise<T> => {
+        invokedCommands.push({ cmd, args });
+        if (cmd === "manage_session_presets") {
+          return "Стек «Навчання» успішно відкрито (LMS UCU, MS Teams та VS Code) 🚀" as unknown as T;
+        }
+        return {} as unknown as T;
+      },
+      callbacks: {
+        onStateChange: () => {},
+      },
+    });
+
+    assert.equal(llmCalled, false);
+    assert.deepEqual(res.executedTools, ["manage_session_presets"]);
+    assert.ok(res.text.includes("Навчання"));
+    assert.ok(
+      invokedCommands.some(
+        (c) =>
+          c.cmd === "manage_session_presets" &&
+          (c.args as Record<string, unknown>).action === "open" &&
+          (c.args as Record<string, unknown>).name === "study"
+      )
+    );
   });
 });

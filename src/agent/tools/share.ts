@@ -63,7 +63,10 @@ export const shareFileWifiTool: ToolSpec<ShareFileWifiArgs> = {
       await ctx.invoke("open_share_window", {
         filePath: args.file_path,
       });
-      const summary = `Локальний сервер роздачі запущено на ${session.share_url}. Вікно з QR-кодом відкрито.`;
+      const isHttps = session.share_url.startsWith("https://");
+      const summary = isHttps
+        ? `Захищений HTTPS-сервер роздачі запущено на ${session.share_url}. Вікно з QR-кодом відкрито.`
+        : `Локальний сервер роздачі запущено на ${session.share_url}. Вікно з QR-кодом відкрито.`;
       return {
         ok: true,
         summary,

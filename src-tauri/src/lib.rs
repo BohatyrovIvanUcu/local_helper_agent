@@ -11,6 +11,7 @@ pub mod files;
 pub mod media;
 pub mod memory;
 pub mod obsidian;
+pub mod presets;
 pub mod reminders;
 pub mod share;
 pub mod voice;
@@ -112,6 +113,12 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             obsidian::append_to_obsidian,
+            obsidian::read_obsidian_note,
+            obsidian::create_or_update_obsidian_note,
+            obsidian::search_obsidian_notes,
+            obsidian::list_obsidian_notes,
+            obsidian::get_or_create_daily_note,
+            obsidian::complete_obsidian_todo,
             files::create_or_update_file,
             files::read_file_or_dir,
             files::run_cli_command,
@@ -146,7 +153,9 @@ pub fn run() {
             share::get_share_status,
             share::open_share_window,
             downloads::analyze_downloads,
-            downloads::execute_downloads_cleanup
+            downloads::execute_downloads_cleanup,
+            presets::manage_session_presets,
+            display::lock_screen
         ])
         .run(tauri::generate_context!())
         .expect("Помилка запуску Tauri-застосунку");

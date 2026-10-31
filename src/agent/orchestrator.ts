@@ -227,6 +227,16 @@ export function detectDirectDisplayCommand(prompt: string): DirectDisplayCommand
   const raw = prompt.trim().toLowerCase().replace(/[!.?,;]+$/g, "").trim();
   const clean = stripConversationalNoise(raw);
 
+  // 0. Блокування екрана / Kill Switch при відході ("я відійшов", "відійшов", "заблокуй екран", "lock", "kill switch")
+  if (
+    /^(?:я\s+)?(?:відійшов|відходжу|пішов|відлучусь|відлучився)$/iu.test(clean) ||
+    /^(?:заблокуй|блокуй)\s+(?:екран|комп|пк|систему|робочий\s+стіл|сесію)$/iu.test(clean) ||
+    /^(?:lock|lock\s+screen|kill\s*switch|кілсвіч|кіл\s*свіч|блокуй|заблокуй)$/iu.test(clean) ||
+    /(?:заблокуй|блокуй)\s+(?:екран|комп|пк)/iu.test(clean)
+  ) {
+    return { action: "lock_screen" };
+  }
+
   // 1. Нічний режим / тепле світло
   if (
     /^(?:night\s+light|night\s+light\s+on)$/iu.test(clean) ||
@@ -472,20 +482,42 @@ export function detectDirectShareCommand(
   prompt: string,
   attachedPath?: string | null
 ): { filePath: string } | null {
-  if (!attachedPath) return null;
   const raw = prompt.trim().toLowerCase().replace(/[!.?,;]+$/g, "").trim();
   const clean = stripConversationalNoise(raw);
 
-  if (
-    /^(?:скинь\s+на\s+телефон|скинути\s+на\s+телефон|перекинь\s+на\s+телефон|на\s+телефон|поділись|поділися|share|роздай|роздати|по\s+вайфаю|по\s+wi-?fi|wifi\s+share)$/iu.test(
-      clean
-    ) ||
-    /(?:скинь|перекинь|відправ|надішли|поділись|поділися|роздай)\s+(?:це\s+|файл\s+|папку\s+)?(?:на\s+телефон|по\s+вайфаю|по\s+wi-?fi|через\s+qr|смартфон)/iu.test(
-      clean
-    )
-  ) {
+  // Словник дій передачі (кинь, скинь, закинь, перекинь, роздай тощо)
+  const shareActions =
+    "(?:кинь|кинути|закинь|закинути|скинь|скинути|перекинь|перекинути|кидай|скидай|перекидай|відправ|відправити|надішли|надіслати|поділись|поділися|поділитися|роздай|роздати|share)";
+  // Словник цілей (телефон, смартфон, мобілка, вайфай, qr)
+  const shareDestinations =
+    "(?:на\\s+телефон|на\\s+смартфон|на\\s+мобілку|на\\s+мобільний|на\\s+трубку|по\\s+вайфаю|по\\s+wi-?fi|wifi\\s+share|через\\s+qr|по\\s+qr|qr|телефон|смартфон)";
+
+  const isShareIntent =
+    new RegExp(
+      `^(?:${shareActions}\\s+${shareDestinations}|${shareActions}|${shareDestinations})$`,
+      "iu"
+    ).test(clean) ||
+    new RegExp(
+      `${shareActions}\\s+(?:це\\s+|файл\\s+|папку\\s+)?(?:${shareDestinations})`,
+      "iu"
+    ).test(clean) ||
+    new RegExp(
+      `(?:${shareDestinations})\\s+(?:це\\s+|файл\\s+|папку\\s+)?(?:${shareActions})`,
+      "iu"
+    ).test(clean);
+
+  if (!isShareIntent) return null;
+
+  if (attachedPath) {
     return { filePath: attachedPath };
   }
+
+  // Якщо файл не прикріплено через DnD, спробуємо знайти шлях у тексті запиту
+  const pathMatch = prompt.match(/(?:^|\s)(~?\/[^\s]+|[a-zA-Z]:\\[^\s]+)/);
+  if (pathMatch) {
+    return { filePath: pathMatch[1].trim() };
+  }
+
   return null;
 }
 
@@ -505,6 +537,86 @@ export function detectDirectDownloadsCommand(
   ) {
     return { action: "analyze" };
   }
+  return null;
+}
+
+export interface DirectPresetCommand {
+  action: "open" | "save" | "close" | "list";
+  name?: string;
+}
+
+export function detectDirectPresetCommand(
+  prompt: string
+): DirectPresetCommand | null {
+  const raw = prompt.trim().toLowerCase().replace(/[!.?,;]+$/g, "").trim();
+  const clean = stripConversationalNoise(raw);
+
+  // 1. Перегляд списку збережених пресетів
+  if (
+    /^(?:які\s+(?:в\s+мене\s+)?є\s+пресети|покажи\s+(?:мої\s+)?пресети|мої\s+пресети|список\s+(?:моїх\s+)?пресетів|список\s+стеків|покажи\s+стеки|які\s+стеки)$/iu.test(
+      clean
+    )
+  ) {
+    return { action: "list" };
+  }
+
+  // 2. Збереження поточного стеку ("збережи поточний стек як [назва]", "збережи сесію як [назва]")
+  const saveMatch =
+    clean.match(
+      /(?:збережи|зафіксуй|запам'ятай)\s+(?:поточний\s+|відкриті\s+)?(?:стек|сесію|вкладки|пресет)(?:\s+(?:як|під\s+назвою|з\s+назвою))?\s+([\p{L}\p{N}_-]+)/iu
+    ) ||
+    clean.match(/^(?:збережи|зафіксуй)\s+пресет\s+([\p{L}\p{N}_-]+)/iu);
+  if (saveMatch && saveMatch[1]) {
+    return { action: "save", name: saveMatch[1].trim() };
+  }
+
+  // 3. Закриття стеку ("закрий усе для навчання", "закрий робочий стек", "закрий стек [назва]")
+  const closeMatch = clean.match(
+    /^закрий\s+(?:усе\s+для\s+|все\s+для\s+|стек\s+|пресет\s+|сесію\s+)?([\p{L}\p{N}_-]+)/iu
+  );
+  if (closeMatch && closeMatch[1]) {
+    const rawTarget = closeMatch[1].trim();
+    if (["навчання", "уроки", "пар", "пари", "study"].includes(rawTarget)) {
+      return { action: "close", name: "study" };
+    }
+    if (["роботи", "роботу", "робочий", "робота", "work"].includes(rawTarget)) {
+      return { action: "close", name: "work" };
+    }
+    return { action: "close", name: rawTarget };
+  }
+
+  // 4. Пряме відкриття навчання / пар / уроків
+  if (
+    /^(?:відкрий\s+)?(?:стек\s+|пресет\s+)?(?:навчання|пари|уроки|універ|study)$/iu.test(
+      clean
+    ) ||
+    /^(?:відкрий\s+навчання|стек\s+навчання|відкрий\s+стек\s+навчання|пресет\s+навчання)$/iu.test(
+      clean
+    )
+  ) {
+    return { action: "open", name: "study" };
+  }
+
+  // 5. Пряме відкриття роботи / робочого стеку
+  if (
+    /^(?:відкрий\s+)?(?:робочий\s+стек|стек\s+розробки|роботу|робота|work)$/iu.test(
+      clean
+    ) ||
+    /^(?:відкрий\s+роботу|відкрий\s+робочий\s+стек|пресет\s+робота|стек\s+робота)$/iu.test(
+      clean
+    )
+  ) {
+    return { action: "open", name: "work" };
+  }
+
+  // 6. Загальне відкриття пресету за назвою ("відкрий пресет [назва]", "запусти пресет [назва]")
+  const openMatch = clean.match(
+    /^(?:відкрий|запусти|підніми)\s+(?:пресет|стек|сесію)\s+([\p{L}\p{N}_-]+)/iu
+  );
+  if (openMatch && openMatch[1]) {
+    return { action: "open", name: openMatch[1].trim() };
+  }
+
   return null;
 }
 
@@ -738,7 +850,9 @@ export async function runAgentTurn(options: RunTurnOptions): Promise<TurnResult>
         filePath: directShare.filePath,
       });
       callbacks.onStateChange("SUCCESS");
-      const summary = `Запустив Wi-Fi роздачу для «${session.file_name}»! 📲\nURL: ${session.share_url}\nВідкрито вікно з QR-кодом для легкого сканування телефоном.`;
+      const isHttps = session.share_url.startsWith("https://");
+      const title = isHttps ? "Запустив захищену HTTPS-роздачу" : "Запустив Wi-Fi роздачу";
+      const summary = `${title} для «${session.file_name}»! 📲\nURL: ${session.share_url}\nВідкрито вікно з QR-кодом для легкого сканування телефоном.`;
 
       return {
         text: summary,
@@ -750,6 +864,46 @@ export async function runAgentTurn(options: RunTurnOptions): Promise<TurnResult>
       return {
         text: `Помилка запуску роздачі: ${msg}`,
         executedTools: ["share_file_wifi"],
+      };
+    }
+  }
+
+  // Пряме миттєве виконання команд робочих сесій/пресетів (<30 мс)
+  const directPreset = detectDirectPresetCommand(userPrompt);
+  if (directPreset && attachments.length === 0) {
+    callbacks.onStateChange("WORKING", "manage_session_presets");
+    try {
+      const summary = await invoke<string>("manage_session_presets", {
+        action: directPreset.action,
+        name: directPreset.name ?? null,
+      });
+
+      if (userPrompt.trim() && summary) {
+        try {
+          await invoke("append_conversation_turn", {
+            user_text: userPrompt.trim(),
+            model_text: summary,
+            tools_used: [`manage_session_presets (${directPreset.action})`],
+            userText: userPrompt.trim(),
+            modelText: summary,
+            toolsUsed: [`manage_session_presets (${directPreset.action})`],
+          });
+        } catch {
+          // ignore memory error
+        }
+      }
+
+      callbacks.onStateChange("SUCCESS");
+      return {
+        text: summary,
+        executedTools: ["manage_session_presets"],
+      };
+    } catch (err) {
+      callbacks.onStateChange("ERROR");
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        text: `Помилка керування робочим стеком: ${msg}`,
+        executedTools: ["manage_session_presets"],
       };
     }
   }
