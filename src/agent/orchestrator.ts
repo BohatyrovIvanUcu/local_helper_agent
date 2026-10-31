@@ -1249,6 +1249,9 @@ export async function runAgentTurn(options: RunTurnOptions): Promise<TurnResult>
       executedToolsDetails.push(`${toolSpec.name}${actionParam}`);
       lastToolSummary = outcome.summary;
 
+      console.log(`🛠️ [Tool Exec] ${toolSpec.name}${actionParam}:`, validation.args);
+      console.log(`📌 [Tool Outcome] ${toolSpec.name} (ok=${outcome.ok}):`, outcome.summary);
+
       if (outcome.untrustedContent) {
         ctx.tainted = true;
       }

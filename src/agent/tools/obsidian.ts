@@ -67,6 +67,42 @@ function cleanFilename(rawFilename?: string | null, defaultName = "TODO.md"): st
   return name;
 }
 
+export function normalizeSection(rawSec?: string | null): string | null {
+  if (!rawSec || typeof rawSec !== "string") return null;
+  const clean = rawSec.replace(/^#+\s*/, "").trim();
+  const lower = clean.toLowerCase();
+  if (
+    lower === "ideas" ||
+    lower === "idea" ||
+    lower.includes("іде") ||
+    lower.includes("ide")
+  ) {
+    return "Ideas";
+  }
+  if (
+    lower === "to do" ||
+    lower === "todo" ||
+    lower === "tasks" ||
+    lower.includes("задач") ||
+    lower.includes("справ") ||
+    lower.includes("туду")
+  ) {
+    return "TO DO";
+  }
+  if (lower.includes("progress") || lower.includes("процес") || lower.includes("робот")) {
+    return "IN PROGRESS";
+  }
+  if (
+    lower.includes("done") ||
+    lower.includes("complet") ||
+    lower.includes("викон") ||
+    lower.includes("заверш")
+  ) {
+    return "Completed";
+  }
+  return clean;
+}
+
 function cleanSubfolder(rawSub?: string | null): string | null {
   const trimmed = typeof rawSub === "string" ? rawSub.trim() : "";
   if (!trimmed || ["null", "none", "undefined", "nil", ".", "/", "~"].includes(trimmed.toLowerCase())) {
@@ -148,7 +184,7 @@ export const obsidianTool: ToolSpec<ObsidianToolArgs> = {
     const subfolder = cleanSubfolder(raw.subfolder as string | undefined);
 
     const rawSec = typeof raw.section === "string" ? raw.section.trim() : "";
-    const section = rawSec ? rawSec.replace(/^#+\s*/, "").trim() : null;
+    const section = normalizeSection(rawSec);
 
     const dueDate =
       typeof raw.due_date === "string" && raw.due_date.trim()
@@ -321,8 +357,9 @@ export const manageObsidianTool: ToolSpec<ManageObsidianToolArgs> = {
     }
 
     const subfolder = cleanSubfolder(raw.subfolder as string | undefined);
-    const filename = raw.filename
-      ? cleanFilename(raw.filename as string, action === "complete_todo" || action === "append" ? "TODO.md" : "Note.md")
+    const rawName = raw.filename ?? raw.title ?? raw.name ?? raw.note_title;
+    let filename = rawName
+      ? cleanFilename(rawName as string, action === "complete_todo" || action === "append" ? "TODO.md" : "Нотатка.md")
       : action === "complete_todo" || action === "append"
       ? "TODO.md"
       : undefined;
@@ -330,11 +367,21 @@ export const manageObsidianTool: ToolSpec<ManageObsidianToolArgs> = {
     const rawContent = raw.content ?? raw.text ?? raw.markdown;
     const content = typeof rawContent === "string" ? rawContent : undefined;
 
+    if (action === "create" && !filename) {
+      const firstLine = (content || "").trim().split("\n")[0] || "";
+      const match = firstLine.match(/^#+\s*(.+)/);
+      if (match && match[1].trim()) {
+        filename = cleanFilename(match[1].trim(), "Нотатка.md");
+      } else {
+        filename = "Нотатка.md";
+      }
+    }
+
     const rawQuery = raw.query ?? raw.task_query ?? raw.q ?? raw.title ?? raw.search;
     const query = typeof rawQuery === "string" ? rawQuery.trim() : undefined;
 
     const rawSec = typeof raw.section === "string" ? raw.section.trim() : "";
-    const section = rawSec ? rawSec.replace(/^#+\s*/, "").trim() : null;
+    const section = normalizeSection(rawSec);
 
     const asTodo =
       raw.as_todo !== undefined
